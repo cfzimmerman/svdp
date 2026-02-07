@@ -1,0 +1,10 @@
+services:
+  dev:
+    build: .
+    volumes:
+      - .:/home/cory/dev/svdp
+      - /home/cory/.tmux.conf:/root/.tmux.conf:ro
+    network_mode: host
+    stdin_open: true
+    tty: true
+    command: bash
