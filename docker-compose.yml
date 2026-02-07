@@ -2,8 +2,10 @@ services:
   dev:
     build: .
     volumes:
-      - .:/home/cory/dev/svdp
-      - /home/cory/.tmux.conf:/root/.tmux.conf:ro
+      - .:/svdp
+      - ~/.tmux.conf:/root/.tmux.conf:ro
+      - ~/.claude.json:/root/.claude.json
+      - ~/.claude:/root/.claude
     network_mode: host
     stdin_open: true
     tty: true
