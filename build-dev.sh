@@ -1,3 +1,3 @@
 #!/bin/zsh
 
-docker build . -t dev
+docker build . -t svdp --no-cache
