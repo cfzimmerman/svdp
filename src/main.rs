@@ -1,8 +1,9 @@
 use anyhow::Context;
 use svdp::api::ServWare;
 
+use clap::Parser;
+use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
-use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "svdp", about = "Admin tools for SVDP at Nativity")]
@@ -26,9 +27,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let credentials = svdp::config::get_credentials().context("failed to get credentials")?;
-    let client =
-        ServWare::new_session(&credentials.username, &credentials.password).await?;
+    let credentials = svdp::get_credentials().context("failed to get credentials")?;
+    let client = ServWare::new_session(&credentials.username, &credentials.password).await?;
 
     match cli.command {
         Command::Login => {

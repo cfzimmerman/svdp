@@ -1,9 +1,9 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use anyhow::Context;
 use reqwest::Url;
 use serde::Deserialize;
-
 
 use super::ServWare;
 
@@ -233,7 +233,7 @@ pub struct FetchRequestsParams {
 impl FetchRequestsParams {
     /// Config for fetching "Open" status requests in
     /// ascending order by date.
-    pub fn new_open() -> Self {
+    pub fn new_open_asc() -> Self {
         Self {
             display_start: 0,
             display_length: 100,

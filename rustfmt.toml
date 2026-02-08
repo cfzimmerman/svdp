@@ -1,0 +1,4 @@
+# Totally flattens imports.
+# Just a style preference. Makes additions and deletions easier to read.
+# cargo +nightly fmt
+imports_granularity = "Item"

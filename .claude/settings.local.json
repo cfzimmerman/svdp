@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose build:*)",
+      "Bash(docker compose:*)",
+      "Bash(chmod:*)",
+      "WebSearch",
+      "WebFetch(domain:www.servware.org)",
+      "WebFetch(domain:www.svdpmpls.org)",
+      "WebFetch(domain:svdpri.org)",
+      "Bash(rustc:*)",
+      "Bash(cargo --version:*)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:lib.rs)",
+      "Bash(cargo build:*)",
+      "Bash(cargo metadata:*)",
+      "Bash(python3:*)",
+      "Bash(cargo doc:*)",
+      "Bash(cargo run:*)",
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test:*)"
+    ]
+  }
+}

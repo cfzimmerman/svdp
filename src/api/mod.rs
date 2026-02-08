@@ -4,16 +4,11 @@ pub mod update_request;
 
 use std::sync::Arc;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
+use anyhow::bail;
 use reqwest::redirect;
-use secrecy::{ExposeSecret, SecretString};
-
-
-use fetch_requests::{AssistanceRequest, FetchRequestsParams};
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+use secrecy::ExposeSecret;
+use secrecy::SecretString;
 
 const BASE_URL: &str = "https://www.servware.org";
 
@@ -51,10 +46,7 @@ impl ServWare {
 
 impl ServWare {
     /// Authenticate with ServWare and return a new session.
-    pub async fn new_session(
-        username: &str,
-        password: &SecretString,
-    ) -> anyhow::Result<Self> {
+    pub async fn new_session(username: &str, password: &SecretString) -> anyhow::Result<Self> {
         let jar = Arc::new(reqwest::cookie::Jar::default());
         let client = reqwest::Client::builder()
             .cookie_provider(jar)
@@ -66,7 +58,10 @@ impl ServWare {
         let url = Self::login_url();
         tracing::debug!(%url, %username, "attempting login");
 
-        let params = [("username", username), ("password", password.expose_secret())];
+        let params = [
+            ("username", username),
+            ("password", password.expose_secret()),
+        ];
 
         let response = client
             .post(&url)
@@ -117,31 +112,5 @@ impl ServWare {
     /// Ping ServWare by extending the session. Confirms the session is still active.
     pub async fn ping(&self) -> anyhow::Result<()> {
         self.extend_session().await
-    }
-
-    /// Fetch a single assistance request by ID.
-    ///
-    /// Internally fetches all requests (no status filter, large page size) and
-    /// finds the matching one.
-    pub(crate) async fn get_request_by_id(
-        &self,
-        id: u64,
-    ) -> anyhow::Result<AssistanceRequest> {
-        let params = FetchRequestsParams {
-            filter_by_status: String::new(), // all statuses
-            display_length: 5000,
-            ..FetchRequestsParams::new_open()
-        };
-
-        let response = self
-            .fetch_requests(&params)
-            .await
-            .context("failed to fetch requests for get_request_by_id")?;
-
-        response
-            .aa_data
-            .into_iter()
-            .find(|r| r.id == id)
-            .with_context(|| format!("request {id} not found in fetched results"))
     }
 }
