@@ -1,5 +1,5 @@
 use anyhow::Context;
-use tracing::{debug, info};
+
 
 use super::ServWare;
 use super::fetch_requests::AssistanceRequest;
@@ -158,7 +158,7 @@ impl ServWare {
         request_id: u64,
         input: &UpdateRequestInput,
     ) -> anyhow::Result<()> {
-        debug!(request_id, "fetching current request state for update");
+        tracing::debug!(request_id, "fetching current request state for update");
         let current = self
             .get_request_by_id(request_id)
             .await
@@ -167,7 +167,7 @@ impl ServWare {
         let form = build_update_form(&current, input);
         let url = Self::request_url(request_id);
 
-        debug!(url, fields = form.len(), "posting request update");
+        tracing::debug!(url, fields = form.len(), "posting request update");
 
         let response = self
             .client
@@ -178,13 +178,13 @@ impl ServWare {
             .context("update request POST failed")?;
 
         let status = response.status();
-        debug!(%status, "update request response");
+        tracing::debug!(%status, "update request response");
 
         if !status.is_success() && !status.is_redirection() {
             anyhow::bail!("update request failed with status {status}");
         }
 
-        info!(request_id, "request updated successfully");
+        tracing::info!(request_id, "request updated successfully");
         Ok(())
     }
 }

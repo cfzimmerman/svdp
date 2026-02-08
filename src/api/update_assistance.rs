@@ -1,5 +1,5 @@
 use anyhow::Context;
-use tracing::{debug, info};
+
 
 use super::ServWare;
 
@@ -87,7 +87,7 @@ impl ServWare {
         form.push(("_pending", "on"));
         form.push(("action", "save"));
 
-        debug!(url, request_id, "posting new assistance item");
+        tracing::debug!(url, request_id, "posting new assistance item");
 
         let response = self
             .client
@@ -98,13 +98,13 @@ impl ServWare {
             .context("add assistance item POST failed")?;
 
         let status = response.status();
-        debug!(%status, "add assistance item response");
+        tracing::debug!(%status, "add assistance item response");
 
         if !status.is_success() && !status.is_redirection() {
             anyhow::bail!("add assistance item failed with status {status}");
         }
 
-        info!(request_id, "assistance item added successfully");
+        tracing::info!(request_id, "assistance item added successfully");
         Ok(())
     }
 }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{Context, bail};
 use reqwest::redirect;
 use secrecy::{ExposeSecret, SecretString};
-use tracing::{debug, info};
+
 
 use fetch_requests::{AssistanceRequest, FetchRequestsParams};
 
@@ -43,6 +43,10 @@ impl ServWare {
     fn assistance_item_url(id: u64) -> String {
         format!("{BASE_URL}/app/assistancerequests/{id}/assistanceitems/new")
     }
+
+    fn extend_session_url() -> String {
+        format!("{BASE_URL}/security/extendSession")
+    }
 }
 
 impl ServWare {
@@ -60,7 +64,7 @@ impl ServWare {
             .context("failed to build HTTP client")?;
 
         let url = Self::login_url();
-        debug!(%url, %username, "attempting login");
+        tracing::debug!(%url, %username, "attempting login");
 
         let params = [("username", username), ("password", password.expose_secret())];
 
@@ -73,7 +77,7 @@ impl ServWare {
 
         let final_url = response.url().to_string();
         let status = response.status();
-        debug!(%status, %final_url, "login response");
+        tracing::debug!(%status, %final_url, "login response");
 
         // A failed login redirects back to the login page.
         if final_url.contains("/security/login") {
@@ -84,8 +88,35 @@ impl ServWare {
             bail!("login failed with status {status}");
         }
 
-        info!("logged in successfully");
+        tracing::info!("logged in successfully");
         Ok(Self { client })
+    }
+
+    /// Extend the current ServWare session to keep it alive.
+    pub async fn extend_session(&self) -> anyhow::Result<()> {
+        let url = Self::extend_session_url();
+        tracing::debug!(%url, "extending session");
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("extend session request failed")?;
+
+        let status = response.status();
+        tracing::debug!(%status, "extend session response");
+
+        if !status.is_success() {
+            bail!("session extend failed with status {status} — session may have expired");
+        }
+
+        Ok(())
+    }
+
+    /// Ping ServWare by extending the session. Confirms the session is still active.
+    pub async fn ping(&self) -> anyhow::Result<()> {
+        self.extend_session().await
     }
 
     /// Fetch a single assistance request by ID.

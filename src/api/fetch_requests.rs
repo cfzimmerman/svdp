@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use reqwest::Url;
 use serde::Deserialize;
-use tracing::debug;
+
 
 use super::ServWare;
 
@@ -324,7 +324,7 @@ impl ServWare {
             }
         }
 
-        debug!(%full_url, "fetching assistance requests");
+        tracing::debug!(%full_url, "fetching assistance requests");
 
         let response = self
             .client
@@ -336,7 +336,7 @@ impl ServWare {
             .context("fetch requests HTTP request failed")?;
 
         let status = response.status();
-        debug!(%status, "fetch requests response");
+        tracing::debug!(%status, "fetch requests response");
 
         if !status.is_success() {
             anyhow::bail!("fetch requests failed with status {status}");
@@ -347,7 +347,7 @@ impl ServWare {
             .await
             .context("failed to parse fetch requests response JSON")?;
 
-        debug!(
+        tracing::debug!(
             total = body.i_total_display_records,
             returned = body.aa_data.len(),
             "fetched assistance requests"

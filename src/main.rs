@@ -1,6 +1,6 @@
 use anyhow::Context;
-use svdp::client::ServwareClient;
-use tracing::info;
+use svdp::api::ServWare;
+
 use tracing_subscriber::EnvFilter;
 use clap::{Parser, Subcommand};
 
@@ -28,11 +28,11 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let credentials = svdp::config::get_credentials().context("failed to get credentials")?;
     let client =
-        ServwareClient::login(&credentials.username, &credentials.password).await?;
+        ServWare::new_session(&credentials.username, &credentials.password).await?;
 
     match cli.command {
         Command::Login => {
-            info!("login successful");
+            tracing::info!("login successful");
         }
         Command::Ping => {
             client.ping().await?;

@@ -2,7 +2,7 @@ use std::env;
 
 use anyhow::Context;
 use secrecy::SecretString;
-use tracing::debug;
+
 
 pub struct Credentials {
     pub username: String,
@@ -16,7 +16,7 @@ pub struct Credentials {
 pub fn get_credentials() -> anyhow::Result<Credentials> {
     let username = match env::var("SVDP_USERNAME") {
         Ok(u) => {
-            debug!("using SVDP_USERNAME from environment");
+            tracing::debug!("using SVDP_USERNAME from environment");
             u
         }
         Err(_) => {
@@ -31,7 +31,7 @@ pub fn get_credentials() -> anyhow::Result<Credentials> {
 
     let password: SecretString = match env::var("SVDP_PASSWORD") {
         Ok(p) => {
-            debug!("using SVDP_PASSWORD from environment");
+            tracing::debug!("using SVDP_PASSWORD from environment");
             p.into()
         }
         Err(_) => {
