@@ -1,3 +1,4 @@
+pub mod fetch_members;
 pub mod fetch_requests;
 pub mod update_assistance;
 pub mod update_request;

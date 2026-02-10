@@ -6,6 +6,7 @@ description = "Admin tools for the St Vincent de Paul society at Nativity Cathol
 
 [dependencies]
 anyhow = "1.0.101"
+chrono = "0.4.43"
 clap = { version = "4.5.57", features = ["derive"] }
 const_format = "0.2.35"
 csv = "1.4.0"

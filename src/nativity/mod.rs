@@ -20,8 +20,19 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    self, ServWare, fetch_requests::FetchRequestsParams, update_request::UpdateRequestInput,
+    ServWare, fetch_requests::FetchRequestsParams, update_request::UpdateRequestInput,
 };
+
+// ---------------------------------------------------------------------------
+// Nativity constants
+// ---------------------------------------------------------------------------
+
+const VISIT_MILEAGE: &str = "5";
+const VISIT_NOTES: &str = "<p>Delivered food and gift cards</p>";
+
+// ---------------------------------------------------------------------------
+// CSV row type
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenRequest {
@@ -41,6 +52,12 @@ pub struct OpenRequest {
     pub neighbor_last_request_date: String,
 }
 
+// ---------------------------------------------------------------------------
+// Public functions
+// ---------------------------------------------------------------------------
+
+/// Fetches all open requests and writes them to a (truncated)
+/// csv at the given path.
 pub async fn requests_to_csv(client: &ServWare, csv: &Path) -> anyhow::Result<()> {
     let mut writer = csv::Writer::from_path(csv)?;
 
@@ -72,15 +89,33 @@ pub async fn requests_to_csv(client: &ServWare, csv: &Path) -> anyhow::Result<()
     Ok(())
 }
 
-pub async fn mark_csv_complete(client: &ServWare, csv: &Path) -> anyhow::Result<()> {
+/// Updates ServWare to mark every request in the CSV as complete,
+/// assigning the given volunteer and visit date.
+pub async fn mark_csv_complete(
+    client: &ServWare,
+    csv: &Path,
+    member_id: &str,
+) -> anyhow::Result<()> {
+    let visit_date = chrono::Local::now().format("%m/%d/%Y").to_string();
+    println!("using visit date: {visit_date}");
+
     let mut reader = csv::Reader::from_path(csv)?;
     for row in reader.deserialize() {
         let row: OpenRequest = row?;
         let update = UpdateRequestInput {
             status: Some("Completed".to_string()),
+            request_assigned_to_member_id: Some(member_id.to_string()),
+            home_visit_required: Some(true),
+            home_visit_cnt: Some("1".to_string()),
+            visit_completed: Some(true),
+            visit_assigned_to_member_id: Some(member_id.to_string()),
+            visit_mileage_in_service: Some(VISIT_MILEAGE.to_string()),
+            visit_scheduled_date: Some(visit_date.to_string()),
+            visit_notes: Some(VISIT_NOTES.to_string()),
             ..Default::default()
         };
         client.update_request(row.req_id, &update).await?;
+        println!("marked request {} complete", row.req_id);
     }
     Ok(())
 }
