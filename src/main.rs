@@ -1,9 +1,12 @@
-use anyhow::Context;
-use svdp::api::ServWare;
+use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Parser;
 use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
+
+use svdp::api::ServWare;
+use svdp::nativity;
 
 #[derive(Parser)]
 #[command(name = "svdp", about = "Admin tools for SVDP at Nativity")]
@@ -14,10 +17,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Log in to ServWare and confirm authentication works.
-    Login,
-    /// Ping ServWare to check if the session is active.
-    Ping,
+    /// Fetches a list of open requests and writes them to a
+    GetRequests { csv: PathBuf },
 }
 
 #[tokio::main]
@@ -31,11 +32,8 @@ async fn main() -> anyhow::Result<()> {
     let client = ServWare::new_session(&credentials.username, &credentials.password).await?;
 
     match cli.command {
-        Command::Login => {
-            tracing::info!("login successful");
-        }
-        Command::Ping => {
-            client.ping().await?;
+        Command::GetRequests { csv } => {
+            nativity::requests_to_csv(&client, &csv).await?;
         }
     }
 

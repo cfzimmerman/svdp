@@ -342,10 +342,15 @@ impl ServWare {
             anyhow::bail!("fetch requests failed with status {status}");
         }
 
-        let body = response
-            .json::<FetchRequestsResponse>()
+        let mut raw: serde_json::Value = response
+            .json()
             .await
             .context("failed to parse fetch requests response JSON")?;
+
+        self::strip_json_nulls(&mut raw);
+
+        let body: FetchRequestsResponse =
+            serde_json::from_value(raw).context("failed to deserialize fetch requests response")?;
 
         tracing::debug!(
             total = body.i_total_display_records,
@@ -354,5 +359,28 @@ impl ServWare {
         );
 
         Ok(body)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Recursively remove null-valued entries from JSON objects so that
+/// `#[serde(default)]` can provide Rust defaults for those fields.
+fn strip_json_nulls(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|_, v| !v.is_null());
+            for v in map.values_mut() {
+                strip_json_nulls(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                strip_json_nulls(v);
+            }
+        }
+        _ => {}
     }
 }
