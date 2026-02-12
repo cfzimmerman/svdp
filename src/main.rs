@@ -35,6 +35,12 @@ pub enum Command {
         #[arg(short = 'i', long)]
         member_id: String,
     },
+
+    /// Adds Second Harvest food and gift card assistance items to each request in the CSV.
+    AddAssistance {
+        #[arg(short, long)]
+        csv: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -62,14 +68,16 @@ async fn main() -> anyhow::Result<()> {
                 .context("no open requests found to scrape member list from")?;
             let request_id = first.id;
 
-            tracing::debug!(request_id, "using request to scrape member list");
             let members = client.fetch_members(request_id).await?;
             for m in &members {
                 println!("{}\t{}", m.id, m.name);
             }
         }
         Command::MarkComplete { csv, member_id } => {
-            nativity::mark_csv_complete(&client, &csv, &member_id).await?;
+            nativity::update_complete(&client, &csv, &member_id).await?;
+        }
+        Command::AddAssistance { csv } => {
+            nativity::add_assistance(&client, &csv).await?;
         }
     }
 

@@ -20,7 +20,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    ServWare, fetch_requests::FetchRequestsParams, update_request::UpdateRequestInput,
+    ServWare, fetch_requests::FetchRequestsParams, update_assistance::UpdateAssistanceInput,
+    update_request::UpdateRequestInput,
 };
 
 // ---------------------------------------------------------------------------
@@ -29,6 +30,14 @@ use crate::api::{
 
 const VISIT_MILEAGE: &str = "5";
 const VISIT_NOTES: &str = "<p>Delivered food and gift cards</p>";
+
+/// ServWare assistance type ID for Second Harvest food.
+const SECOND_HARVEST_TYPE_ID: &str = "16542";
+/// Monetary value recorded for a Second Harvest food delivery.
+const SECOND_HARVEST_VALUE: &str = "70";
+
+/// ServWare assistance type ID for gift cards.
+const GIFT_CARD_TYPE_ID: &str = "16522";
 
 // ---------------------------------------------------------------------------
 // CSV row type
@@ -44,6 +53,7 @@ pub struct OpenRequest {
 
     // Field(s) that don't map to any specific ServWare entry.
     pub merged_address: String,
+    pub gift_card_dollars: u32,
 
     // Fields from `Client`
     pub neighbor_id: u64,
@@ -55,6 +65,17 @@ pub struct OpenRequest {
 // ---------------------------------------------------------------------------
 // Public functions
 // ---------------------------------------------------------------------------
+
+fn gift_card_dollars(family_size: u32) -> u32 {
+    match family_size {
+        0 | 1 => 50,
+        2 => 60,
+        3 => 70,
+        4 => 80,
+        5 => 90,
+        _ => 100,
+    }
+}
 
 /// Fetches all open requests and writes them to a (truncated)
 /// csv at the given path.
@@ -75,6 +96,7 @@ pub async fn requests_to_csv(client: &ServWare, csv: &Path) -> anyhow::Result<()
                 "{} {}, {}, {}",
                 req.street_address_line1, req.street_address_line2, req.city, req.state_code
             ),
+            gift_card_dollars: self::gift_card_dollars(req.calculated_household_count),
 
             neighbor_id: req.client.id,
             neighbor_first_name: req.client.first_name,
@@ -91,11 +113,7 @@ pub async fn requests_to_csv(client: &ServWare, csv: &Path) -> anyhow::Result<()
 
 /// Updates ServWare to mark every request in the CSV as complete,
 /// assigning the given volunteer and visit date.
-pub async fn mark_csv_complete(
-    client: &ServWare,
-    csv: &Path,
-    member_id: &str,
-) -> anyhow::Result<()> {
+pub async fn update_complete(client: &ServWare, csv: &Path, member_id: &str) -> anyhow::Result<()> {
     let visit_date = chrono::Local::now().format("%m/%d/%Y").to_string();
     println!("using visit date: {visit_date}");
 
@@ -117,5 +135,51 @@ pub async fn mark_csv_complete(
         client.update_request(row.req_id, &update).await?;
         println!("marked request {} complete", row.req_id);
     }
+
+    Ok(())
+}
+
+/// Adds two assistance items (Second Harvest food + gift cards) to every
+/// request in the CSV.
+pub async fn add_assistance(client: &ServWare, csv: &Path) -> anyhow::Result<()> {
+    let date_provided = chrono::Local::now().format("%m/%d/%Y").to_string();
+    println!("using date provided: {date_provided}");
+
+    let mut reader = csv::Reader::from_path(csv)?;
+    for row in reader.deserialize() {
+        let row: OpenRequest = row?;
+        let client_id = row.neighbor_id.to_string();
+
+        // 1. Second Harvest food
+        let second_harvest = UpdateAssistanceInput::new(
+            SECOND_HARVEST_TYPE_ID,
+            &client_id,
+            SECOND_HARVEST_VALUE,
+            "1",
+            &date_provided,
+        );
+        client
+            .update_assistance(row.req_id, &second_harvest)
+            .await?;
+        println!(
+            "  request {}: added Second Harvest (${SECOND_HARVEST_VALUE})",
+            row.req_id
+        );
+
+        // 2. Gift cards
+        let gift_cards = UpdateAssistanceInput::new(
+            GIFT_CARD_TYPE_ID,
+            &client_id,
+            row.gift_card_dollars.to_string(),
+            "1",
+            &date_provided,
+        );
+        client.update_assistance(row.req_id, &gift_cards).await?;
+        println!(
+            "  request {}: added gift cards (${})",
+            row.req_id, row.gift_card_dollars
+        );
+    }
+
     Ok(())
 }

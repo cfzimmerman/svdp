@@ -7,6 +7,9 @@ use super::ServWare;
 // ---------------------------------------------------------------------------
 
 /// Fields for adding a new assistance item to a request.
+///
+/// Mirrors the full form captured from the ServWare UI. All optional/unused
+/// fields are sent as empty strings to match browser behaviour.
 pub struct UpdateAssistanceInput {
     // Required
     pub assistance_type_id: String,
@@ -16,7 +19,6 @@ pub struct UpdateAssistanceInput {
     pub date_provided: String,
 
     // Optional
-    pub promised_date: String,
     pub notes: String,
     pub client_account_name: String,
     pub client_account_holder: String,
@@ -40,7 +42,6 @@ impl UpdateAssistanceInput {
             monetary_value: monetary_value.into(),
             quantity: quantity.into(),
             date_provided: date_provided.into(),
-            promised_date: String::new(),
             notes: String::new(),
             client_account_name: String::new(),
             client_account_holder: String::new(),
@@ -57,6 +58,9 @@ impl UpdateAssistanceInput {
 
 impl ServWare {
     /// Add an assistance item to a request.
+    ///
+    /// Sends the full form matching the browser's POST, including empty
+    /// optional fields, to avoid server-side validation issues.
     pub async fn update_assistance(
         &self,
         request_id: u64,
@@ -67,15 +71,22 @@ impl ServWare {
         let mut form: Vec<(&str, &str)> = vec![
             ("assistanceTypeId", &input.assistance_type_id),
             ("clientId", &input.client_id),
+            ("housingProviderId", ""),
+            ("vendorId", ""),
+            ("utilityId", ""),
+            ("clientAccountId", ""),
+            ("clientAccountName", &input.client_account_name),
+            ("clientAccountNumber", &input.client_account_number),
+            ("clientAccountHolder", &input.client_account_holder),
+            ("specialProgramId", ""),
+            ("inKindSubType", ""),
             ("monetaryValue", &input.monetary_value),
+            ("accountId", ""),
             ("quantity", &input.quantity),
             ("dateProvided", &input.date_provided),
-            ("promisedDate", &input.promised_date),
-            ("notes", &input.notes),
-            ("clientAccountName", &input.client_account_name),
-            ("clientAccountHolder", &input.client_account_holder),
-            ("clientAccountNumber", &input.client_account_number),
-            ("payeeName", &input.payee_name),
+            ("voucherAsstId", ""),
+            ("_pending", "on"),
+            ("promisedDate", ""),
         ];
 
         // Spring MVC checkbox convention
@@ -83,7 +94,17 @@ impl ServWare {
             form.push(("checkRequested", "true"));
         }
         form.push(("_checkRequested", "on"));
-        form.push(("_pending", "on"));
+
+        form.push(("datePaid", ""));
+        form.push(("checkNumber", ""));
+        form.push(("payeeName", &input.payee_name));
+        form.push(("notes", &input.notes));
+        form.push(("councilPaymentValue", ""));
+        form.push(("councilCheckConfNumber", ""));
+        form.push(("districtPaymentValue", ""));
+        form.push(("districtCheckConfNumber", ""));
+        form.push(("otherPaymentValue", ""));
+        form.push(("otherCheckConfNumber", ""));
         form.push(("action", "save"));
 
         tracing::debug!(url, request_id, "posting new assistance item");
