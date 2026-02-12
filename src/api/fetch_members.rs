@@ -1,5 +1,9 @@
-use anyhow::{Context, ensure};
-use scraper::{Html, Selector};
+use anyhow::Context;
+use anyhow::ensure;
+use scraper::Html;
+use scraper::Selector;
+use serde::Deserialize;
+use serde::Serialize;
 
 use super::ServWare;
 
@@ -8,7 +12,7 @@ use super::ServWare;
 // ---------------------------------------------------------------------------
 
 /// A volunteer member scraped from the request detail page.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Member {
     pub id: String,
     pub name: String,
@@ -63,7 +67,10 @@ impl ServWare {
             })
             .collect();
 
-        ensure!(!members.is_empty(), "no members found in request {request_id} — page structure may have changed");
+        ensure!(
+            !members.is_empty(),
+            "no members found in request {request_id} — page structure may have changed"
+        );
 
         tracing::debug!(count = members.len(), "scraped member list");
         Ok(members)

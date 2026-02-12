@@ -17,12 +17,14 @@ Plan:
 
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use anyhow::Context;
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::api::{
-    ServWare, fetch_requests::FetchRequestsParams, update_assistance::UpdateAssistanceInput,
-    update_request::UpdateRequestInput,
-};
+use crate::api::ServWare;
+use crate::api::fetch_requests::FetchRequestsParams;
+use crate::api::update_assistance::UpdateAssistanceInput;
+use crate::api::update_request::UpdateRequestInput;
 
 // ---------------------------------------------------------------------------
 // Nativity constants
@@ -75,6 +77,29 @@ fn gift_card_dollars(family_size: u32) -> u32 {
         5 => 90,
         _ => 100,
     }
+}
+
+pub async fn members_to_csv(client: &ServWare, csv: &Path) -> anyhow::Result<()> {
+    let mut writer = csv::Writer::from_path(csv)?;
+
+    // Find an arbitrary request from which to scrape volunteer names.
+    let reqs = client
+        .fetch_requests(&FetchRequestsParams::new_open_asc())
+        .await
+        .context("failed to fetch open requests")?;
+
+    let first = reqs
+        .aa_data
+        .first()
+        .context("no open requests found to scrape member list from")?;
+    let request_id = first.id;
+
+    for mber in client.fetch_members(request_id).await? {
+        println!("{mber:?}");
+        writer.serialize(&mber)?;
+    }
+
+    Ok(())
 }
 
 /// Fetches all open requests and writes them to a (truncated)

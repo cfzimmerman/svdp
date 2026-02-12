@@ -6,7 +6,6 @@ use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
 
 use svdp::api::ServWare;
-use svdp::api::fetch_requests::FetchRequestsParams;
 use svdp::nativity;
 
 #[derive(Parser)]
@@ -25,7 +24,10 @@ pub enum Command {
     },
 
     /// Lists volunteer members (ID and name) from ServWare.
-    ListMembers,
+    ListMembers {
+        #[arg(short, long)]
+        csv: PathBuf,
+    },
 
     /// Marks all requests in a CSV as complete with volunteer and visit details.
     MarkComplete {
@@ -57,21 +59,8 @@ async fn main() -> anyhow::Result<()> {
         Command::GetRequests { csv } => {
             nativity::requests_to_csv(&client, &csv).await?;
         }
-        Command::ListMembers => {
-            let reqs = client
-                .fetch_requests(&FetchRequestsParams::new_open_asc())
-                .await
-                .context("failed to fetch open requests")?;
-            let first = reqs
-                .aa_data
-                .first()
-                .context("no open requests found to scrape member list from")?;
-            let request_id = first.id;
-
-            let members = client.fetch_members(request_id).await?;
-            for m in &members {
-                println!("{}\t{}", m.id, m.name);
-            }
+        Command::ListMembers { csv } => {
+            nativity::members_to_csv(&client, &csv).await?;
         }
         Command::MarkComplete { csv, member_id } => {
             nativity::update_complete(&client, &csv, &member_id).await?;
