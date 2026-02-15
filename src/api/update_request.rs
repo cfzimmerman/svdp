@@ -334,14 +334,12 @@ impl ServWare {
         Ok(())
     }
 
-    /// Fetch a single assistance request by ID.
+    /// Fetch a single open assistance request by ID.
     ///
-    /// Internally fetches all requests (no status filter, large page size) and
-    /// finds the matching one.
+    /// Internally fetches open requests (large page size) and finds the matching one.
     async fn get_request_by_id(&self, id: u64) -> anyhow::Result<AssistanceRequest> {
         let params = FetchRequestsParams {
-            filter_by_status: String::new(), // all statuses
-            display_length: 5000,
+            display_length: 1000,
             ..FetchRequestsParams::new_open_asc()
         };
 

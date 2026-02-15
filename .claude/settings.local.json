@@ -25,7 +25,8 @@
       "Bash(python:*)",
       "Bash(tr:*)",
       "Bash(cargo tree:*)",
-      "Bash(RUST_LOG=reqwest=trace cargo build:*)"
+      "Bash(RUST_LOG=reqwest=trace cargo build:*)",
+      "Bash(jq:*)"
     ]
   }
 }

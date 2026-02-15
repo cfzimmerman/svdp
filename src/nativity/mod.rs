@@ -130,7 +130,7 @@ pub async fn requests_to_csv(client: &ServWare, csv: &Path) -> anyhow::Result<()
         };
 
         writer.serialize(open)?;
-        println!("wrote request id: {}", req.id);
+        tracing::info!("wrote request id: {}", req.id);
     }
 
     Ok(())
@@ -140,7 +140,7 @@ pub async fn requests_to_csv(client: &ServWare, csv: &Path) -> anyhow::Result<()
 /// assigning the given volunteer and visit date.
 pub async fn update_complete(client: &ServWare, csv: &Path, member_id: &str) -> anyhow::Result<()> {
     let visit_date = chrono::Local::now().format("%m/%d/%Y").to_string();
-    println!("using visit date: {visit_date}");
+    tracing::info!("using visit date: {visit_date}");
 
     let mut reader = csv::Reader::from_path(csv)?;
     for row in reader.deserialize() {
