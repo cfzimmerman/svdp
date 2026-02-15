@@ -188,7 +188,7 @@ pub async fn add_assistance(client: &ServWare, csv: &Path) -> anyhow::Result<()>
         client
             .update_assistance(row.req_id, &second_harvest)
             .await?;
-        println!(
+        tracing::info!(
             "  request {}: added Second Harvest (${SECOND_HARVEST_VALUE})",
             row.req_id
         );
@@ -202,9 +202,10 @@ pub async fn add_assistance(client: &ServWare, csv: &Path) -> anyhow::Result<()>
             &date_provided,
         );
         client.update_assistance(row.req_id, &gift_cards).await?;
-        println!(
+        tracing::info!(
             "  request {}: added gift cards (${})",
-            row.req_id, row.gift_card_dollars
+            row.req_id,
+            row.gift_card_dollars
         );
     }
 
