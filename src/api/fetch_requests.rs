@@ -349,8 +349,8 @@ impl ServWare {
 
         self::strip_json_nulls(&mut raw);
 
-        let body: FetchRequestsResponse =
-            serde_json::from_value(raw).context("failed to deserialize fetch requests response")?;
+        let body: FetchRequestsResponse = serde_json::from_value(raw)
+            .with_context(|| "failed to deserialize fetch requests response: {raw:?}")?;
 
         tracing::debug!(
             total = body.i_total_display_records,

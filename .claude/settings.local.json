@@ -23,7 +23,9 @@
       "Bash(cargo clippy:*)",
       "Bash(cargo test:*)",
       "Bash(python:*)",
-      "Bash(tr:*)"
+      "Bash(tr:*)",
+      "Bash(cargo tree:*)",
+      "Bash(RUST_LOG=reqwest=trace cargo build:*)"
     ]
   }
 }

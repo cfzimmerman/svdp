@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::bail;
+use reqwest::header::{self, HeaderMap, HeaderValue};
 use reqwest::redirect;
 use secrecy::ExposeSecret;
 use secrecy::SecretString;
@@ -49,10 +50,22 @@ impl ServWare {
     /// Authenticate with ServWare and return a new session.
     pub async fn new_session(username: &str, password: &SecretString) -> anyhow::Result<Self> {
         let jar = Arc::new(reqwest::cookie::Jar::default());
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT, HeaderValue::from_static(
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        ));
+        headers.insert(header::ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.8"));
+        headers.insert("sec-fetch-dest", HeaderValue::from_static("document"));
+        headers.insert("sec-fetch-mode", HeaderValue::from_static("navigate"));
+        headers.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
+        headers.insert("sec-fetch-user", HeaderValue::from_static("?1"));
+        headers.insert(header::UPGRADE_INSECURE_REQUESTS, HeaderValue::from_static("1"));
+
         let client = reqwest::Client::builder()
             .cookie_provider(jar)
             .redirect(redirect::Policy::limited(10))
-            .user_agent("svdp-client/0.1")
+            .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36")
+            .default_headers(headers)
             .build()
             .context("failed to build HTTP client")?;
 
@@ -66,6 +79,8 @@ impl ServWare {
 
         let response = client
             .post(&url)
+            .header(header::ORIGIN, "https://www.servware.org")
+            .header(header::REFERER, "https://www.servware.org/security/login")
             .form(&params)
             .send()
             .await
@@ -77,6 +92,7 @@ impl ServWare {
 
         // A failed login redirects back to the login page.
         if final_url.contains("/security/login") {
+            tracing::error!("{response:?}");
             bail!("login failed: redirected back to login page (bad credentials?)");
         }
 

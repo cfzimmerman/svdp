@@ -64,10 +64,6 @@ pub struct OpenRequest {
     pub neighbor_last_request_date: String,
 }
 
-// ---------------------------------------------------------------------------
-// Public functions
-// ---------------------------------------------------------------------------
-
 fn gift_card_dollars(family_size: u32) -> u32 {
     match family_size {
         0 | 1 => 50,
@@ -78,6 +74,10 @@ fn gift_card_dollars(family_size: u32) -> u32 {
         _ => 100,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Public functions
+// ---------------------------------------------------------------------------
 
 pub async fn members_to_csv(client: &ServWare, csv: &Path) -> anyhow::Result<()> {
     let mut writer = csv::Writer::from_path(csv)?;
@@ -157,8 +157,10 @@ pub async fn update_complete(client: &ServWare, csv: &Path, member_id: &str) -> 
             visit_notes: Some(VISIT_NOTES.to_string()),
             ..Default::default()
         };
+
+        tracing::info!("updating request: {row:?}");
         client.update_request(row.req_id, &update).await?;
-        println!("marked request {} complete", row.req_id);
+        tracing::info!("marked request {} complete", row.req_id);
     }
 
     Ok(())

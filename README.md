@@ -4,6 +4,15 @@ This repo automates frequent administrative work
 needed by the St. Vincent de Paul society at
 Nativity Catholic Church in Menlo Park, CA
 
+### DISCLAIMER
+
+A lot of this repo is claude generated. It's a
+quick and dirty tool that saves some time for volunteers.
+
+But this is IN NO WAY representative of what I consider
+production code. So please don't consider this a reflection
+of my standards of software craftsmanship.
+
 ### Background
 
 Community members (neighbors) may submit requests for

@@ -3,3 +3,9 @@
 # Directory for .har files and other info for reverse-engineering
 # the servware API.
 /servware
+
+# Default output locations
+volunteers.csv
+requests.csv
+
+.env
