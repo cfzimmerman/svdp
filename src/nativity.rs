@@ -47,21 +47,21 @@ const GIFT_CARD_TYPE_ID: &str = "16522";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenRequest {
-    // Fields from `AssistanceRequest`.
-    pub req_id: u64,
-    pub req_date_created: String,
-    pub req_status: String,
-    pub req_calculated_household_count: u32,
-
-    // Field(s) that don't map to any specific ServWare entry.
-    pub merged_address: String,
-    pub gift_card_dollars: u32,
-
     // Fields from `Client`
     pub neighbor_id: u64,
     pub neighbor_first_name: String,
     pub neighbor_last_name: String,
     pub neighbor_last_request_date: String,
+
+    // Field(s) that don't map to any specific ServWare entry.
+    pub gift_card_dollars: u32,
+    pub merged_address: String,
+
+    // Fields from `AssistanceRequest`.
+    pub req_id: u64,
+    pub req_status: String,
+    pub req_date_created: String,
+    pub req_calculated_household_count: u32,
 }
 
 fn gift_card_dollars(family_size: u32) -> u32 {
