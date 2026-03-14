@@ -38,7 +38,7 @@ pub enum Command {
         #[arg(short, long, default_value = "requests.csv")]
         csv: PathBuf,
 
-        #[arg(short = 'i', long)]
+        #[arg(short, long)]
         volunteer_id: String,
     },
 
