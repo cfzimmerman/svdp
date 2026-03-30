@@ -46,16 +46,16 @@ your local list. But this is not part of the weekly workflow. It
 could probably be version controlled, but that's kind of DOXXING
 our SVdP members.
 
-```bash
-svdp% cargo run -- -e list-members
+```sh
+cargo run -- -e list-members
 ```
 
 ### CLI docs
 
 When in doubt, the help flag will show your options:
 
-```bash
-svdp% cargo run -- --help
+```sh
+cargo run -- --help
 ```
 
 # Weekly workflow
@@ -65,8 +65,8 @@ svdp% cargo run -- --help
 Remember, the `-e` flag is only if you keep your credentials
 in a .env file. Otherwise leave it out.
 
-```bash
-svdp% cargo run -- -e get-requests
+```sh
+cargo run -- -e get-requests
 ```
 
 ### Hand edit the CSV
@@ -87,7 +87,7 @@ The csv parameter reads requests.csv by default. But you'll need to
 specify something else if you're assigning different requests to
 different volunteer ids.
 
-```bash
+```sh
 cargo run -- -e mark-complete --volunteer-id "FROM VOLUNTEERS.CSV"
 ```
 
@@ -97,8 +97,8 @@ This adds Second Harvest and Gift Card items to the requests in the CSV.
 
 Again this defaults to requests.csv.
 
-```bash
-svdp% cargo run -- -e add-assistance
+```sh
+cargo run -- -e add-assistance
 ```
 
 # Contributing
