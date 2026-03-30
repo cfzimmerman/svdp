@@ -15,7 +15,7 @@ pub struct Args {
     #[command(subcommand)]
     pub command: Command,
 
-    #[arg(short, long, default_value_t = false)]
+    #[arg(short = 'e', long, default_value_t = false)]
     search_env: bool,
 }
 

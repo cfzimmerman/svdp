@@ -4,13 +4,112 @@ This repo automates frequent administrative work
 needed by the St. Vincent de Paul society at
 Nativity Catholic Church in Menlo Park, CA
 
+# First-time setup
+
+### Have a Servware username and password
+
+These are given by the SVdP chapter.
+
+### Clone this repo and cd into it
+
+I did not publish this to crates.io because it’s not useful to a general audience.
+
+### Install rust
+
+https://rust-lang.org/tools/install/
+
+The commands below use `cargo run`. You can also build the binary
+and execute it directly, but I typically don't bother with
+that or with release builds because there's just no need.
+
+### Optional: make an env file
+
+Servware uses username:password auth via https. This was not my decision :)
+You can either provide your username and password for every command or make
+it an env variable. `.env` is gitignored at the repo root.
+
+The `-e` flag in commands tells this tool to load and use the env file.
+
+```.env
+SERVWARE_USER="..."
+SERVWARE_PASS="..."
+```
+
+### Generate volunteers.csv
+
+Request completions are assigned to a volunteer. You supply the
+volunteer id as a cli arg when marking requests complete. This
+command generates a list of volunteer ids to choose from.
+
+Redo this step if a new volunteer is added and you need to update
+your local list. But this is not part of the weekly workflow. It
+could probably be version controlled, but that's kind of DOXXING
+our SVdP members.
+
+```bash
+svdp% cargo run -- -e list-members
+```
+
+### CLI docs
+
+When in doubt, the help flag will show your options:
+
+```bash
+svdp% cargo run -- --help
+```
+
+# Weekly workflow
+
+### Generate requests.csv
+
+Remember, the `-e` flag is only if you keep your credentials
+in a .env file. Otherwise leave it out.
+
+```bash
+svdp% cargo run -- -e get-requests
+```
+
+### Hand edit the CSV
+
+`get-requests` writes open requests into whatever CSV path you
+provide or `requests.csv` by default.  
+
+Delete any entries that should not be marked complete. Align the
+dollar values with the gift cards you gave out. You might need to
+break requests.csv into multiple CSVs if you had multiple delivery groups.
+
+### Mark complete
+
+This resolves the open request. Use a volunteer id from the
+volunteers.csv you generated during first-time setup.
+
+The csv parameter reads requests.csv by default. But you'll need to
+specify something else if you're assigning different requests to
+different volunteer ids.
+
+```bash
+cargo run -- -e mark-complete --volunteer-id "FROM VOLUNTEERS.CSV"
+```
+
+### Add assistance
+
+This adds Second Harvest and Gift Card items to the requests in the CSV.
+
+Again this defaults to requests.csv.
+
+```bash
+svdp% cargo run -- -e add-assistance
+```
+
+# Contributing
+
 ### DISCLAIMER
 
 A lot of this repo is claude generated. It's a
 quick and dirty tool that saves some time for volunteers.
 
 But this is IN NO WAY representative of what I consider
-production code. So please don't consider this a reflection
+production code. So please don't assume this is a reflection
 of my standards of software craftsmanship.
 
 ### Background
