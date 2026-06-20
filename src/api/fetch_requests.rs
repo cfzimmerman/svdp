@@ -53,10 +53,10 @@ pub struct AssistanceRequest {
     pub postal_code: String,
 
     // --- Assignment ---
-    pub request_assigned_to_member: Option<String>,
+    pub request_assigned_to_member: Option<serde_json::Value>,
     pub visit_assigned_to: Option<String>,
-    pub visit_assigned_to_member: Option<String>,
-    pub visit_assigned_to_member_secondary: Option<String>,
+    pub visit_assigned_to_member: Option<serde_json::Value>,
+    pub visit_assigned_to_member_secondary: Option<serde_json::Value>,
 
     // --- Household ---
     pub household_adult_count: Option<u32>,
@@ -349,8 +349,8 @@ impl ServWare {
 
         self::strip_json_nulls(&mut raw);
 
-        let body: FetchRequestsResponse = serde_json::from_value(raw)
-            .context("failed to deserialize fetch requests response")?;
+        let body: FetchRequestsResponse =
+            serde_json::from_value(raw).context("failed to deserialize fetch requests response")?;
 
         tracing::debug!(
             total = body.i_total_display_records,
