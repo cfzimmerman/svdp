@@ -1,11 +1,20 @@
 /target
 
-# Directory for .har files and other info for reverse-engineering
-# the servware API.
-/servware
+# ---------------------------------------------------------------------------
+# PII: nothing derived from real ServWare data may ever be committed.
+# Match by glob, not by filename -- the weekly workflow creates ad-hoc files
+# like group1.csv, and an exact-name ignore list does not cover them.
+# ---------------------------------------------------------------------------
+*.csv
+*.har
+*.json.gz
 
-# Default output locations
-volunteers.csv
-requests.csv
+# Raw captures for local reverse-engineering. Never leaves this machine.
+/servware/
+/recordings/
+
+# Synthetic test fixtures are the one committed exception. They are generated
+# from a synthetic corpus and never contain real data. See tests/no_pii.rs.
+!/tests/fixtures/**/*.csv
 
 .env

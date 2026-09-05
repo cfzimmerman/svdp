@@ -1,55 +1,120 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repository.
 
-**Every Claude session must keep CLAUDE.md updated** with project purpose, user feedback, and decisions so context carries across sessions.
+**Keep this file updated** with project purpose, decisions, and user feedback so context
+carries across sessions.
 
 ## Project
 
-**Repository**: svdp (github.com/cfzimmerman/svdp)
+**Repository**: svdp (github.com/cfzimmerman/svdp) — **public**.
 
-SVDP (St. Vincent de Paul) at Nativity Catholic Church in Menlo Park delivers food to community members in need. The county takes requests via a web app called **ServWare** (servware.org), a jQuery/Bootstrap server-rendered app built for SVDP chapters. There are no public API docs.
+SVdP (St. Vincent de Paul) at Nativity Catholic Church in Menlo Park delivers food and
+grocery gift cards to families in need. The county records requests in **ServWare**
+(servware.org), a Spring MVC + jQuery/Bootstrap app with no public API.
 
-### Goals
+Twice a week volunteers deliver in one to three groups, then must mark requests Complete
+and log dollar values for food and gift cards. This tool automates that last step.
 
-1. Query open requests from ServWare and export to CSV
-2. Read/sort CSV to find oldest open requests
-3. Apply updates back to ServWare
+### Goal
 
-### Current Phase
+Make the workflow usable by **elderly, non-technical volunteers** — no terminal, no
+spreadsheets — via an MCP server installed into the Claude Desktop **Chat tab**.
 
-**Phase 1**: HTTP client foundation — authenticate with ServWare and make requests. This requires reverse-engineering the API with the user's help via browser dev tools network captures.
+## PII: the hard rule
 
-### What we know about ServWare
+Neighbour data is sensitive information about vulnerable families, and this repo is public.
 
-Full API reference: **`servware/api.md`** (reverse-engineered from HAR captures)
-
-Key endpoints:
-- `POST /security/login` — form fields: `username`, `password` → 302 to `/app/home?continue`
-- `GET /app/assistancerequests/list` — DataTables SSP JSON API, returns `{sEcho, iTotalRecords, iTotalDisplayRecords, aaData}`
-- `POST /app/assistancerequests/{id}` — update request (mark complete), 30 form fields, Spring MVC checkbox convention
-- `POST /app/assistancerequests/{id}/assistanceitems/new` — add assistance item
-
-Session: HttpOnly cookies (not visible in HAR exports), 1-hour timeout, extendable via `GET /security/extendSession`
+- **Never commit CSVs, HAR captures, or anything derived from a real ServWare response.**
+  `.gitignore` matches by glob (`*.csv`, `*.har`), not by filename — the old exact-name list
+  missed the `group1.csv` files the documented workflow told users to create.
+- **Fixtures are synthetic by construction** (`scripts/gen-fixtures.py`), not scrubbed from
+  real data. Field *names* are protocol facts and safe; every *value* is invented.
+- Real captures are validated against by an **opt-in local test** that reads a path from
+  `SVDP_LOCAL_DETAIL_HTML` and prints structure only, never values.
+- Do not print neighbour or volunteer PII into transcripts, terminal output, or logs. The
+  request detail page carries names, addresses, phones, **SSN last-4**, driver's licence, and
+  the family's full request history.
 
 ## Architecture
 
-- **Language**: Rust (edition 2024)
-- **Error handling**: `anyhow::Result` everywhere, `.context()` for meaning, `bail!`/`ensure!` for conditions. No custom error types.
-- **HTTP client**: `reqwest` with `cookie_store(true)` for automatic session management
-- **Credentials**: env vars (`SVDP_USERNAME`/`SVDP_PASSWORD`) for scripting, `rpassword` interactive prompt for manual use. No config file.
-- **Password safety**: `secrecy::SecretString` wraps password to prevent accidental logging
-- **CLI**: `clap` derive-based subcommands
+- **Language**: Rust (edition 2024). Chosen over a TypeScript port for dependency stability
+  and because typed errors make "did this write land?" checkable.
+- **Two UIs over one logic layer**: `src/bin/mcp.rs` (volunteers, via Claude Desktop) and the
+  CLI (maintainer). Protocol and domain logic stay independent of both.
+- **Errors**: `thiserror` types at the library boundary — the MCP layer must *match* on error
+  kind to choose retry / skip / escalate. `anyhow` in binaries only. (This reverses an earlier
+  rule in this file that said "no custom error types"; that was right for a pure CLI.)
+- **HTTP**: `reqwest` with a cookie jar. Base URL is **injected**, not a const, so tests point
+  at a local server and exercise real cookies, redirects, and encoding.
 
-## Build and Run
+### Form handling — the load-bearing piece
+
+`src/servware/form.rs` extracts *every* named control from a form and applies a checked
+overlay. Never enumerate fields by hand.
+
+Why: the live request edit form renders **50 named controls**; the old hand-written builder
+sent 39 and silently cleared the other 11 (`otherVisitCnt`, `eldercareVisitCnt`,
+`hospitalVisitCnt`, `prisonVisitCnt`, `phoneVisitCnt`, `churchPantryVisitCnt`,
+`referralOrganizationId{,2,3,4}`, `referralConference`) on every mark-complete.
+
+Rules encoded there, verified against a real capture:
+- Extraction is **form-scoped** — the page has other forms (a send-email modal) whose controls
+  must not leak in.
+- `id` and `name` diverge (`id="homeVisitAssignedFirst"` is `name="visitAssignedToMemberId"`).
+  **Always key on `name`.**
+- Unchecked checkboxes are **rendered but not submitted**. The full control inventory is kept
+  so an overlay can tell "ServWare removed this field" (an error) from "this box is off"
+  (normal, and what marking a visit complete flips).
+- Spring MVC checkbox convention: `name=value` only when checked, `_name=on` always.
+- Overlaying a control the form does not render is a **hard error** — the canary for ServWare
+  renaming something.
+
+## Verified facts (spike, Sep 2026)
+
+- **`rmcp` 3.2.0** works: stdio server, tool schemas derived from serde structs via `schemars`,
+  `annotations(read_only_hint = true)` for client auto-approval. Requires Rust ≥ 1.88.
+- **`.mcpb` packaging works with a Rust binary.** `server.type = "binary"`,
+  `command: "${__dirname}/bin/svdp-mcp"`. Build with `scripts/build-mcpb.sh`; it validates the
+  manifest before zipping. `manifest_version` must be `0.3`/`0.4`, and **every `user_config`
+  entry requires `description`** (omitting it fails install with "Required, Required").
+- **Gatekeeper is a non-issue.** Claude Desktop does not propagate the quarantine attribute
+  when unpacking a bundle; a downloaded `.mcpb` installs and runs. No Developer ID or
+  notarization needed.
+- **`sensitive: true` values are encrypted at rest** in
+  `~/Library/Application Support/Claude/Claude Extensions Settings/<ext>.json`, keyed by the
+  `Claude Safe Storage` keychain item, and injected as env vars at server spawn. The model
+  never sees the value.
+- An installed extension starts **disabled**; it must be toggled on before tools appear.
+- No CSRF token in the request form — all 14 hidden fields are accounted for.
+- ServWare sessions expire after 3600s; long delivery-night chats will cross that, so
+  transparent re-auth is a functional requirement.
+
+## Known defects in the legacy `src/api` + `src/nativity.rs` path
+
+Being replaced; do not extend. Writes accept any 2xx/3xx as success while Spring re-renders a
+rejected form as 200 (so failures report as successes); blanket `#[serde(default)]` turns a
+renamed `calculatedHouseholdCount` into `0`, which the gift-card ladder maps to $50 for every
+family; `add_assistance` is not idempotent and double-logs money on re-run; `?` inside write
+loops strands batches with no recovery path; the list call caps at 100 with no pagination.
+
+## Build and run
 
 ```bash
-cargo build                                    # Build
-cargo run -- login                             # Test login
-cargo run -- ping                              # Test session keepalive
-RUST_LOG=svdp=debug cargo run -- login         # Debug logging
+cargo test                      # must pass with no network
+cargo build --bin mcp           # the MCP server
+./scripts/build-mcpb.sh         # -> dist/svdp-servware.mcpb (run on the target platform)
+python3 scripts/gen-fixtures.py # regenerate synthetic fixtures
+
+# Validate against a real local capture (never committed):
+SVDP_LOCAL_DETAIL_HTML=/path/detail.html cargo test --test local_capture -- --ignored --nocapture
 ```
 
-## Dev Environment
+Credentials come from `SERVWARE_USER` / `SERVWARE_PASS` (env, or `.env`). The `.mcpb` supplies
+them from its `user_config`.
 
-Docker-based dev environment. Use `./run-dev.sh` to start.
+## Reference
+
+`api.md` is the reverse-engineered ServWare API reference. It is **partly abridged** — its
+assistance-item section lists 13 form fields where the real browser POST sends 30. Where
+`api.md` and a capture disagree, the capture wins, and `api.md` should be corrected.

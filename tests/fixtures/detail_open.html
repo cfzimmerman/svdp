@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html><head><title>Assistance Request</title></head><body>
+<form id="requestForm" method="post" action="/app/assistancerequests/3724739">
+  <select name="status"><option value="Open" selected>Open</option><option value="Completed">Completed</option><option value="Denied">Denied</option></select>
+  <input type="hidden" name="denialReasonId" value=""/>
+  <input type="hidden" name="denialReasonStr" value=""/>
+  <input type="hidden" name="clientFirstName" value="Jane"/>
+  <input type="hidden" name="clientLastName" value="Doe"/>
+  <input type="text" name="dateRequested" value="02/02/2026"/>
+  <select id="requestAssignedToMemberId" name="requestAssignedToMemberId"><option value="" selected>-- Select --</option><option value="44270">Ada Lovelace</option><option value="44271">Grace Hopper</option></select>
+  <textarea name="requestNote">&lt;p&gt;Needs food assistance&lt;/p&gt;</textarea>
+  <input type="file"/>
+  <input type="checkbox" name="homeVisitRequired" value="true" checked/><input type="hidden" name="_homeVisitRequired" value="on"/>
+  <input type="number" name="homeVisitCnt" value="1"/>
+  <input type="checkbox" name="otherVisit" value="true"/><input type="hidden" name="_otherVisit" value="on"/><input type="number" name="otherVisitCnt" value="3"/>
+  <input type="checkbox" name="elderCareVisit" value="true"/><input type="hidden" name="_elderCareVisit" value="on"/><input type="number" name="eldercareVisitCnt" value="4"/>
+  <input type="checkbox" name="hospitalVisit" value="true"/><input type="hidden" name="_hospitalVisit" value="on"/><input type="number" name="hospitalVisitCnt" value="5"/>
+  <input type="checkbox" name="prisonVisit" value="true"/><input type="hidden" name="_prisonVisit" value="on"/><input type="number" name="prisonVisitCnt" value="6"/>
+  <input type="checkbox" name="telephoneVisit" value="true"/><input type="hidden" name="_telephoneVisit" value="on"/><input type="number" name="phoneVisitCnt" value="7"/>
+  <input type="checkbox" name="churchPantryVisit" value="true"/><input type="hidden" name="_churchPantryVisit" value="on"/><input type="number" name="churchPantryVisitCnt" value="8"/>
+  <input type="checkbox" name="visitCompleted" value="true"/><input type="hidden" name="_visitCompleted" value="on"/>
+  <select id="homeVisitAssignedFirst" name="visitAssignedToMemberId"><option value="" selected>-- Select --</option><option value="44270">Ada Lovelace</option><option value="44271">Grace Hopper</option></select>
+  <select id="homeVisitAssignedSecond" name="visitAssignedToMemberIdSecondary"><option value="" selected>-- Select --</option><option value="44270">Ada Lovelace</option><option value="44271">Grace Hopper</option></select>
+  <input type="number" name="visitMileageInService" value="12"/>
+  <input type="number" name="visitHoursInService" value="2"/>
+  <input type="text" name="visitScheduledDate" value="02/07/2026"/>
+  <input type="text" name="visitScheduledTime" value="09:30"/>
+  <input type="number" name="peopleHelpedOverride" value=""/>
+  <textarea name="visitNotes">&lt;p&gt;Prior visit&lt;/p&gt;</textarea>
+  <input type="checkbox" name="referredToAgency" value="true"/><input type="hidden" name="_referredToAgency" value="on"/>
+  <select id="referralOrgId" name="referralOrganizationId"><option value="">-- Select --</option><option value="900" selected>County Referral</option><option value="901">Parish Referral</option></select>
+  <select id="referralOrgId2" name="referralOrganizationId2"><option value="" selected>-- Select --</option><option value="900">County Referral</option><option value="901">Parish Referral</option></select>
+  <input type="checkbox" name="referredToConference" value="true"/><input type="hidden" name="_referredToConference" value="on"/>
+  <input type="hidden" name="referralConference" value="17"/>
+  <select name="referredFromOrganizationId"><option value="" selected>-- Select --</option><option value="900">County Referral</option><option value="901">Parish Referral</option></select>
+  <textarea name="referralNote"></textarea>
+  <input type="text" name="ignoredBecauseDisabled" value="nope" disabled/>
+  <button type="submit">Save</button>
+</form>
+
+<!-- A modal form on the same page. Extraction is form-scoped and must ignore it. -->
+<form id="sendEmailForm" method="post" action="/app/sendemail">
+  <select name="sendToRoleId"><option value="3">Conference President</option></select>
+  <input type="hidden" name="clientMapBoundaryScope" value="conference"/>
+</form>
+
+<table id="assistanceItemsTable">
+<tr><th></th><th>Assistance</th><th>Value</th><th>Date Provided</th><th>Pending</th></tr>
+
+</table>
+</body></html>

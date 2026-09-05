@@ -1,0 +1,46 @@
+{
+  "manifest_version": "0.3",
+  "name": "svdp-servware",
+  "display_name": "SVdP ServWare",
+  "version": "0.1.0",
+  "description": "Record St. Vincent de Paul food and gift card deliveries in ServWare.",
+  "long_description": "Guides a volunteer through recording a delivery night: lists open assistance requests, confirms gift card amounts, splits deliveries by volunteer group, and writes the results back to ServWare.",
+  "author": {
+    "name": "Cory Zimmerman",
+    "url": "https://github.com/cfzimmerman/svdp"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cfzimmerman/svdp.git"
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "bin/svdp-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/bin/svdp-mcp",
+      "args": [],
+      "env": {
+        "SERVWARE_USER": "${user_config.servware_user}",
+        "SERVWARE_PASS": "${user_config.servware_pass}"
+      }
+    }
+  },
+  "user_config": {
+    "servware_user": {
+      "type": "string",
+      "title": "ServWare username",
+      "description": "The username your SVdP conference gave you for servware.org.",
+      "required": true
+    },
+    "servware_pass": {
+      "type": "string",
+      "title": "ServWare password",
+      "description": "Your servware.org password. Stored in your Mac keychain, never shown in chat.",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin"]
+  }
+}
