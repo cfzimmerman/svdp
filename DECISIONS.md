@@ -366,3 +366,119 @@ Whether Claude Desktop surfaces MCP prompts in its UI is **not documented** — 
 described for the Agent SDK, not the consumer Chat client. They cost little, and if the client
 does surface them they are the shortest path of all; until that is confirmed, the desktop
 shortcut is what the guide should say.
+
+## D19. Household ages come from the request detail page, not from a report
+
+*September 2026*
+
+A volunteer organising the Christmas Adopt-a-Family program needed active households with a
+child aged 13 or under. She could already export ServWare's Neighbor Assistance Summary Report,
+but it does not carry the children's ages, so last year she opened each household's record and
+typed the youngest and second-youngest child's age in by hand.
+
+**The ages were already in a page this tool downloads on every delivery.** The request detail
+page is a six-tab Bootstrap layout and every pane is server-rendered inline in the same ~200 KB
+response. `div#tabs-familymembers` holds a table of `First Name · Last Name · Relationship · Age
+· Phone · SSN (Last 4) · Drivers License/ID · Disabled · Notes`. `Age` is an integer ServWare
+computes server-side; there is no per-member birthdate on the page at all.
+
+**Rejected: the report routes.** The detail page's nav menu leaks about two dozen of them,
+including `clientrequestsummariesrpt` — her report. Every one is an unknown quantity: unknown
+parameters, unknown response format, unknown whether any exports. The same table is
+reconstructable from `/app/clients/list` plus `/app/assistancerequests/list`, both already
+understood, with columns we choose. They are recorded in `api.md` §12 as existing and
+deliberately unexplored.
+
+**Rejected: the neighbour detail page.** `/app/clients/{id}` looked like the natural home for a
+household roster, and would have avoided joining through a request. Spiked with one live GET:
+its `tabs-family` pane renders only the two head-count inputs plus an empty
+`<div id="familymember-list"></div>` filled by XHR. It would cost two requests per household and
+an endpoint never captured. The request detail page serves the same data in one page we already
+parse, so households are reached through their most recent request.
+
+**Two facts verified against 139 real households, both of which change how the data must be
+read:**
+
+* **The members table excludes the neighbour themselves.** No row ever carries a `Relationship`
+  of "Self" — observed values are Son, Daughter, Spouse, Domestic Partner, Mother, Father,
+  Brother, Sister, Cousin, Grandson, Granddaughter, Niece, Nephew, Stepson, Uncle, Grandparent,
+  Other. `calculatedHouseholdCount` equalled the row count **plus one** in all 139 cases. A
+  household size derived from these rows must add one, and there is no "Self" row to filter out.
+* **A household may have no roster at all.** ServWare's own tooltip says "Enter household adult
+  and child counts or enter specific household member details. Only one or the other is
+  allowed." Households recorded by head count produce no rows, so their children's ages do not
+  exist in the system. In a 06/01–08/31 window that was 19 of 158 households, 8 of which have
+  children. This is not a parser bug and it must never be silently dropped from an answer — the
+  skill requires reporting those families as a separate list for manual checking.
+
+## D20. The extension extracts; ordinary Claude analyses
+
+*September 2026*
+
+Asked to support projects beyond deliveries, the instinct is to build the project in. That is
+rejected. The extension pulls a slice of the neighbour population into CSVs and stops.
+
+The reasoning is that the hard part is extraction, not analysis. ServWare is behind a login form
+with no public API, so nothing but this code can get the data out. Once the data is a CSV, plain
+Claude is already good at the rest — filtering, grouping, joining, and emitting a new spreadsheet
+are things it does without any help from us.
+
+So there is **no query language, no filter DSL, and no report-specific logic in the Rust.** The
+export layer produces the three natural grains of the data — household, request, person — each
+carrying `client_id` so they can be joined. Adopt-a-Family is then a paragraph in a skill, and
+next year's different question needs no code change.
+
+**Where overfitting belongs is markdown.** `skills/pulling-svdp-data/references/adopt-a-family.md`
+is deliberately specific to one program, down to the age cut-off and the output columns, because
+next December it gets edited in a text editor rather than recompiled.
+
+**Consequence for the tool surface:** exports return a path and a row count, never rows. A
+separate `read_export` hands the CSV text over when someone actually asks for analysis, so
+neighbour data enters a conversation only on purpose. It takes a bare filename — separators,
+`..`, and absolute paths are refused rather than normalised — so it can only read files this tool
+wrote.
+
+## D21. Export columns are an allowlist, and ages are emitted where dates of birth are not
+
+*September 2026*
+
+`/app/clients/list` returns the entire Client record regardless of which columns are requested —
+about sixty fields, including `ssnLastFour`, `driversLicenseId`, `identificationType`,
+`idExpirationDate`, `caseNumber`, `notes` and `alertNote`. The household members table sits
+beside the ages in the same DOM.
+
+Each export's header set is therefore a `const` in `domain::export`, **pinned by a test** that
+asserts the emitted header equals it exactly and that no column name matches an identity or
+free-text pattern. A new ServWare field cannot add a column by accident; adding one is a
+deliberate edit to a visible list.
+
+Never emitted, from any table: SSN, driver's licence, other identity documents, case notes,
+alert notes, and **dates of birth**. The last is the substantive choice. Ages answer every
+question these projects ask, and a spreadsheet that gets emailed between volunteers then never
+carries the name + address + date-of-birth triple. This is easy here only because ServWare
+renders ages rather than birthdates on the page we parse.
+
+For the members table the identity columns are not merely dropped after parsing — **they are
+never read out of the DOM.** Only the four wanted columns are addressed by index, and
+`tests/exports.rs` plants sentinel values in the SSN and licence cells and asserts they appear in
+neither a parsed member nor a rendered CSV.
+
+Files are written `0600` and land on the Desktop, discovered via `UserDirs` rather than
+configured, so the install flow volunteers already have does not grow a third box.
+
+## D22. Reads that fan out are approval-gated, even though they are reads
+
+*September 2026*
+
+`read_only_hint` exists so a client can auto-approve reads and the conversation stays smooth —
+six dialogs before anything happens loses this audience (D1). `export_neighbors`,
+`export_requests` and `read_export` carry it: each is a handful of JSON pages or a local file.
+
+`export_household_members` deliberately does not. It opens one 200 KB page per household against
+a live county system under a named account — 158 households in the verification window, taking
+just under two minutes. The approval dialog is the honest encoding of "this makes 160 requests,
+is that what you meant?", which is the same discipline the write tools follow. Alongside it:
+fetches are sequential with a 150 ms gap and never concurrent; the default ceiling is 200
+households with a hard maximum of 400; going over **refuses and names the count** rather than
+truncating, because half a list is how a family gets left off a Christmas program; and every
+export result states how many requests it made.

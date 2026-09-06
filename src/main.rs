@@ -8,10 +8,15 @@ use clap::Parser;
 use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
 
+use svdp::domain::export;
+use svdp::domain::export::ExportDir;
+use svdp::domain::export::HouseholdRoster;
 use svdp::domain::policy::ConferenceConfig;
+use svdp::domain::pull;
 use svdp::servware::client::Credentials;
 use svdp::servware::client::PUBLIC_BASE_URL;
 use svdp::servware::client::ServWareClient;
+use svdp::servware::clients;
 use svdp::servware::detail;
 use svdp::servware::list;
 use svdp::servware::list::StatusFilter;
@@ -77,8 +82,44 @@ enum Command {
         /// Request id whose detail page to capture. Defaults to the oldest open one.
         #[arg(long)]
         id: Option<u64>,
+        /// Capture an arbitrary path instead, for protocol spikes.
+        #[arg(long)]
+        path: Option<String>,
         #[arg(long, default_value = "recordings")]
         out: std::path::PathBuf,
+    },
+    /// Export the whole neighbour roster to a CSV.
+    ExportNeighbors {
+        /// Where to write. Defaults to the Desktop.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
+    /// Export assistance requests in a date range to a CSV.
+    ExportRequests {
+        /// MM/DD/YYYY. Omit to walk the whole history (bounded, but slow).
+        #[arg(long)]
+        from: Option<String>,
+        /// MM/DD/YYYY.
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
+    /// Export household members and their ages. One page fetch per household.
+    ExportHouseholdMembers {
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long, default_value_t = pull::DEFAULT_MAX_HOUSEHOLDS)]
+        max_households: u32,
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
+    /// List the exports already written.
+    Exports {
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
     },
     /// Dump a request's edit form, to inspect what a write would send.
     Form {
@@ -283,8 +324,17 @@ async fn main() -> anyhow::Result<()> {
             println!("status now: {}", detail::fetch(&client, request).await?.status());
         }
 
-        Command::Snapshot { id, out } => {
+        Command::Snapshot { id, path, out } => {
             std::fs::create_dir_all(&out)?;
+            if let Some(path) = path {
+                let html = client.get_html(&path).await?;
+                let name = path.trim_matches('/').replace('/', "_");
+                let dest = out.join(format!("{name}.html"));
+                std::fs::write(&dest, &html)?;
+                println!("wrote {} ({} bytes)", dest.display(), html.len());
+                println!("this file contains real neighbour data and is gitignored");
+                return Ok(());
+            }
             let id = match id {
                 Some(id) => id,
                 None => {
@@ -306,6 +356,50 @@ async fn main() -> anyhow::Result<()> {
             );
         }
 
+        Command::ExportNeighbors { out } => {
+            let rows = clients::fetch_all(&client).await?;
+            let table = export::neighbors_table(&rows);
+            write_export(&table, out)?;
+        }
+
+        Command::ExportRequests { from, to, out } => {
+            let from = parse_arg_date(from.as_deref(), "--from")?;
+            let to = parse_arg_date(to.as_deref(), "--to")?;
+            let budget = if from.is_some() { 12 } else { 20 };
+            let rows = list::fetch_window(&client, StatusFilter::Any, from, to, budget).await?;
+            let table = export::requests_table(&rows);
+            write_export(&table, out)?;
+        }
+
+        Command::ExportHouseholdMembers { from, to, max_households, out } => {
+            let from = parse_arg_date(from.as_deref(), "--from")?;
+            let to = parse_arg_date(to.as_deref(), "--to")?;
+            let (households, stats) =
+                pull::household_members(&client, from, to, max_households).await?;
+            let rosters: Vec<HouseholdRoster<'_>> = households
+                .iter()
+                .map(|h| HouseholdRoster {
+                    client_id: h.client_id,
+                    household_last_name: &h.last_name,
+                    members: &h.members,
+                })
+                .collect();
+            let table = export::members_table(&rosters);
+            println!(
+                "{} households; {} requests made to ServWare; {} had no members listed",
+                stats.households, stats.servware_requests, stats.without_members
+            );
+            write_export(&table, out)?;
+        }
+
+        Command::Exports { out } => {
+            let dir = export_dir(out)?;
+            println!("{}", dir.path().display());
+            for (name, bytes) in dir.list() {
+                println!("  {name}  ({bytes} bytes)");
+            }
+        }
+
         Command::Form { id, filter } => {
             let d = detail::fetch(&client, id).await?;
             let pairs = d.form.pairs();
@@ -319,6 +413,30 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn parse_arg_date(raw: Option<&str>, flag: &str) -> anyhow::Result<Option<chrono::NaiveDate>> {
+    match raw {
+        None => Ok(None),
+        Some(s) => list::parse_date(s)
+            .map(Some)
+            .with_context(|| format!("{flag} must look like MM/DD/YYYY, got {s:?}")),
+    }
+}
+
+fn export_dir(out: Option<std::path::PathBuf>) -> anyhow::Result<ExportDir> {
+    match out {
+        Some(dir) => Ok(ExportDir::at(dir)),
+        None => Ok(ExportDir::desktop()?),
+    }
+}
+
+fn write_export(table: &export::Table, out: Option<std::path::PathBuf>) -> anyhow::Result<()> {
+    let dir = export_dir(out)?;
+    let path = dir.write(table, chrono::Local::now().date_naive())?;
+    println!("wrote {} ({} rows)", path.display(), table.len());
+    println!("this file contains real neighbour data — keep it on this computer");
     Ok(())
 }
 

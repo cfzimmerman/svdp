@@ -14,8 +14,8 @@
 /servware/
 /recordings/
 
-# Synthetic test fixtures are the one committed exception. They are generated
-# from a synthetic corpus and never contain real data. See tests/no_pii.rs.
-!/tests/fixtures/**/*.csv
+# No CSV is ever committed, synthetic or not. Fixtures are HTML and JSON, which
+# keeps this rule absolute and matches the check CI enforces -- an earlier
+# `!/tests/fixtures/**/*.csv` exception here contradicted that check outright.
 
 .env

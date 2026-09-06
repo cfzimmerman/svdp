@@ -34,9 +34,13 @@ PYEOF
 fi
 
 echo "==> validating manifest"
-python3 - "$STAGE/manifest.json" <<'PY'
-import json, sys
+python3 - "$STAGE/manifest.json" "$ROOT/Cargo.toml" <<'PY'
+import json, re, sys
 m = json.load(open(sys.argv[1]))
+# The manifest version is what Claude Desktop shows, and it silently drifted
+# from the crate version once already. Keep them equal.
+crate = re.search(r'^version = "([^"]+)"', open(sys.argv[2]).read(), re.M).group(1)
+assert m["version"] == crate, f'manifest {m["version"]} != Cargo.toml {crate}'
 for k in ("manifest_version", "name", "version", "description", "author", "server"):
     assert k in m, f"manifest missing required key: {k}"
 s = m["server"]

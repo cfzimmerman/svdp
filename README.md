@@ -67,6 +67,40 @@ It always shows you the full list and asks before saving anything.
 
 **If something looks wrong, say so.** Nothing is written to ServWare until you say yes.
 
+## Getting lists of families for a project
+
+Deliveries are the weekly job. For occasional projects — Christmas Adopt-a-Family, a mailing, a
+summary for the conference — the extension can also pull information **out** of ServWare into
+spreadsheets on your Desktop, which you can open in Excel or ask Claude to work through with you.
+
+Just say what you need, in your own words:
+
+> I need a list of families with young children for Adopt-a-Family.
+
+Claude will ask what counts as recent, save the information to your Desktop as spreadsheets, and
+then help you work out the answer. Three files are available:
+
+| File | One row per | What it is for |
+|---|---|---|
+| `svdp-neighbors-<date>.csv` | family | everyone the conference serves: name, address, phones |
+| `svdp-requests-<date>.csv` | request | who asked for help, when, and how much was given |
+| `svdp-household-members-<date>.csv` | person | **everyone in each house, and their age** |
+
+The third one is the useful new thing — ages are not in any report ServWare can export, and until
+now the only way to get them was to open each family's record and type them in.
+
+Two things worth knowing:
+
+- **Looking up ages takes a minute or two.** Claude opens one page per family, so it will ask you
+  to approve it and ask for a date range first. Giving a date range keeps it quick.
+- **Some families have no ages recorded.** ServWare lets a conference enter either a head count
+  *or* the individual people, not both, so families entered as a head count have no ages in the
+  system at all. Claude will list those separately rather than quietly leaving them out — they are
+  the ones you would still need to check by hand.
+
+Nothing in this reads out to anyone or writes anything back to ServWare. **These files hold real
+family information — keep them on your own computer.**
+
 ## Notes for whoever looks after this
 
 ### Building
@@ -91,6 +125,16 @@ svdp volunteers                 # volunteer names and ids
 svdp request 4311091            # one request and what is logged against it
 svdp form 4311091               # the edit form, to see what a write would send
 svdp snapshot                   # save one page locally for offline work
+svdp snapshot --path /app/...   # capture any page, for protocol spikes
+```
+
+Data pulls, which write CSVs to the Desktop unless you pass `--out`:
+
+```bash
+svdp export-neighbors
+svdp export-requests --from 06/01/2026 --to 08/31/2026
+svdp export-household-members --from 06/01/2026 --to 08/31/2026
+svdp exports                    # what has already been written
 ```
 
 Writes are dry-run unless you pass `--yes`:

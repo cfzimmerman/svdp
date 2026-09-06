@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "svdp-servware",
   "display_name": "SVdP ServWare",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Record St. Vincent de Paul food and gift card deliveries in ServWare.",
   "long_description": "Guides a volunteer through recording a delivery night: lists open assistance requests, confirms gift card amounts, splits deliveries by volunteer group, and writes the results back to ServWare.",
   "author": {

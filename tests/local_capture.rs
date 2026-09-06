@@ -109,6 +109,56 @@ fn real_detail_page_parses() {
     }
 }
 
+/// The household-members tab against a real page.
+///
+/// Ages are the whole point of this parser, so what gets printed is how many
+/// rows were found and how many carried a readable age -- never a name, never a
+/// relationship, never an age itself.
+#[test]
+#[ignore = "requires a local ServWare capture; see module docs"]
+fn real_detail_page_has_household_members() {
+    let Ok(path) = std::env::var("SVDP_LOCAL_DETAIL_HTML") else {
+        eprintln!("SVDP_LOCAL_DETAIL_HTML not set; nothing to validate");
+        return;
+    };
+    let html = std::fs::read_to_string(&path).expect("capture readable");
+
+    assert!(
+        html.contains("tabs-familymembers"),
+        "the real page should carry the Household Members tab inline"
+    );
+
+    let d = svdp::servware::detail::parse(0, &html).expect("detail page parses");
+    let people = &d.household_members;
+    let with_age = people.iter().filter(|m| m.age.is_some()).count();
+    let selves = people.iter().filter(|m| m.is_self()).count();
+
+    println!("  household members found: {}", people.len());
+    println!("  with a readable age    : {with_age}");
+    println!("  rows marked as \"Self\" : {selves}");
+
+    assert!(!people.is_empty(), "a real household should have members");
+    assert!(
+        people.iter().all(|m| !m.first_name.is_empty()),
+        "a parsed member with no first name means the columns moved"
+    );
+    assert!(with_age > 0, "no ages parsed -- the Age column moved or changed");
+
+    // The identity columns sit in the same table. Nothing that looks like a
+    // driver's licence or an SSN may have reached a parsed field.
+    let parsed = format!("{people:?}");
+    for m in people {
+        assert!(
+            m.age.is_none_or(|a| a < 120),
+            "an implausible age means a different column was read"
+        );
+    }
+    assert!(
+        !parsed.contains("Drivers") && !parsed.contains("SSN"),
+        "a header leaked into a parsed value"
+    );
+}
+
 /// Cross-check the assistance-item golden against a real captured POST.
 ///
 ///   SVDP_LOCAL_HAR=/path/to/servware.har cargo test --test local_capture -- --ignored --nocapture

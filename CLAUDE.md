@@ -58,6 +58,12 @@ Neighbour data is sensitive information about vulnerable families, and this repo
 - Do not print neighbour or volunteer PII into transcripts, terminal output, or logs. The
   request detail page carries names, addresses, phones, **SSN last-4**, driver's licence, and
   the family's full request history.
+- **CSV exports emit an allowlist, pinned by a test.** Never SSN, driver's licence, identity
+  documents, case notes, alert notes, or **dates of birth** — exports carry ages instead, so a
+  spreadsheet passed between volunteers never holds name + address + DOB. In the household
+  members table the identity columns are never even read out of the DOM. See DECISIONS.md D21.
+- **Exports never enter a conversation on their own.** An export tool returns a path and a row
+  count; `read_export` hands over the text only when someone asks for analysis.
 
 ## Architecture
 
@@ -70,6 +76,24 @@ Neighbour data is sensitive information about vulnerable families, and this repo
   rule in this file that said "no custom error types"; that was right for a pure CLI.)
 - **HTTP**: `reqwest` with a cookie jar. Base URL is **injected**, not a const, so tests point
   at a local server and exercise real cookies, redirects, and encoding.
+
+### Data pulls — the extension extracts, Claude analyses
+
+Beyond deliveries the conference runs occasional projects (Christmas Adopt-a-Family) that need
+to *understand* the neighbour population. The rule is that **the Rust produces honest, wide,
+joinable tables and stops**; filtering, grouping and arithmetic happen in the conversation.
+No query language, no filter DSL, no report-specific logic in code. See DECISIONS.md D20.
+
+Three grains, all joinable on `client_id`, written to the Desktop as CSV:
+
+| table | one row per | source | cost |
+|---|---|---|---|
+| `neighbors` | household | `/app/clients/list` | ~5 JSON pages |
+| `requests` | assistance request | `/app/assistancerequests/list`, date-windowed | a few pages |
+| `household-members` | person, **with age** | request detail pages | one page per household |
+
+Project-specific knowledge lives in `skills/pulling-svdp-data/references/`, deliberately
+overfit, because markdown gets edited next season rather than recompiled.
 
 ### Form handling — the load-bearing piece
 
@@ -110,6 +134,19 @@ Rules encoded there, verified against a real capture:
   never sees the value.
 - An installed extension starts **disabled**; it must be toggled on before tools appear.
 - No CSRF token in the request form — all 14 hidden fields are accounted for.
+- **The request detail page is six tabs, all server-rendered inline** — no XHR for any of them.
+  `div#tabs-familymembers` carries each household member's **integer Age**, computed server-side;
+  there is no per-member birthdate anywhere on the page.
+- **That table excludes the neighbour themselves.** Verified across 139 real households: no
+  "Self" row ever appears, and `calculatedHouseholdCount` was the row count **plus one** every
+  time. Household size derived from these rows must add one.
+- **A household may have no roster at all.** ServWare allows a head count *or* individual
+  members, not both — 19 of 158 households in one window, 8 of them with children. Report those
+  families separately; never let them vanish from an answer.
+- **`/app/clients/list`** is the same DataTables protocol as the request list and returns the
+  whole conference roster (`iTotalRecords: 416` at Nativity) as complete Client objects.
+  `/app/clients/{id}` is *not* usable for household members: its roster div is XHR-filled.
+- The ~24 report routes exist and are **deliberately unexplored**; `api.md` §12 lists them.
 - ServWare sessions expire after 3600s; long delivery-night chats will cross that, so
   transparent re-auth is a functional requirement.
 
@@ -128,6 +165,12 @@ cargo test                      # must pass with no network
 cargo build --bin mcp           # the MCP server
 ./scripts/build-mcpb.sh         # -> dist/svdp-servware.mcpb (run on the target platform)
 python3 scripts/gen-fixtures.py # regenerate synthetic fixtures
+
+# Data pulls (maintainer CLI; the MCP tools do the same thing):
+cargo run --bin svdp -- export-neighbors
+cargo run --bin svdp -- export-requests --from 06/01/2026 --to 08/31/2026
+cargo run --bin svdp -- export-household-members --from 06/01/2026 --to 08/31/2026
+cargo run --bin svdp -- snapshot --path /app/clients/123   # capture any page for a spike
 
 # Validate against a real local capture (never committed):
 SVDP_LOCAL_DETAIL_HTML=/path/detail.html cargo test --test local_capture -- --ignored --nocapture

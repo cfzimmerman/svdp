@@ -3,7 +3,11 @@
 
 Field *names* and control types are reverse-engineered protocol facts and carry
 no personal data. Every *value* here is invented. Real captures never enter the
-repo; see tests/no_pii.rs for the enforcing assertion.
+repo: `.gitignore` globs `*.csv`/`*.har`, and CI fails the build if any is tracked.
+
+The household-members fixtures plant sentinel values in the SSN and driver's
+licence cells; `tests/exports.rs` asserts those never reach a parsed field or a
+CSV. Do not remove them.
 """
 import pathlib
 
@@ -26,7 +30,48 @@ def checkbox(name, checked):
     return (f'<input type="checkbox" name="{name}" value="true"{c}/>'
             f'<input type="hidden" name="_{name}" value="on"/>')
 
-def detail_page(*, status="Open", visit_completed=False, assigned="", items_html=""):
+# The Household Members tab. Column order and header text are protocol facts;
+# every value is invented. The SSN and driver's-licence cells carry sentinels so
+# a test can assert they never reach a parsed field or a CSV.
+MEMBER_COLUMNS = ["First Name", "Last Name", "Relationship", "Age",
+                  "Phone", "SSN (Last 4)", "Drivers License/ID", "Disabled", "Notes"]
+
+SENTINEL_SSN = "9999"
+SENTINEL_DL = "SENTINELDLNEVERREAD"
+
+HOUSEHOLD = [
+    ("Maria", "Okonkwo", "Self", "41"),
+    ("Peter", "Okonkwo", "Son", "17"),
+    ("Daniel", "Okonkwo", "Son", "12"),
+    ("Ruth", "Okonkwo", "Daughter", "8"),
+]
+
+def members_html(rows=None, extra_column=None):
+    """`extra_column` inserts a header+cell before Age, to prove that columns are
+    resolved by header text rather than by position."""
+    rows = HOUSEHOLD if rows is None else rows
+    heads = list(MEMBER_COLUMNS)
+    if extra_column:
+        heads.insert(heads.index("Age"), extra_column)
+    head_html = "".join(f"<th>{h}</th>" for h in heads)
+    body = ""
+    for first, last, rel, age in rows:
+        cells = [first, last, rel]
+        if extra_column:
+            cells.append("n/a")
+        cells += [age, "555-0100", SENTINEL_SSN, SENTINEL_DL, "No", "SENTINELNOTE"]
+        body += "<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
+    adults = sum(1 for r in rows if r[3] and int(r[3]) >= 18)
+    return f'''<div id="tabs-familymembers" class="tab-pane">
+  <div class="row"><div class="col-sm-12"><h4>Adults: {adults} &nbsp; Children: {len(rows) - adults}</h4></div></div>
+  <table class="table table-striped table-condensed">
+    <thead><tr>{head_html}</tr></thead>
+    {body}
+  </table>
+</div>'''
+
+def detail_page(*, status="Open", visit_completed=False, assigned="", items_html="",
+                members=None):
     return f"""<!DOCTYPE html>
 <html><head><title>Assistance Request</title></head><body>
 <form id="editForm" method="post" action="/app/assistancerequests/3724739">
@@ -73,6 +118,8 @@ def detail_page(*, status="Open", visit_completed=False, assigned="", items_html
   <input type="hidden" name="clientMapBoundaryScope" value="conference"/>
 </form>
 
+{members_html() if members is None else members}
+
 <table class="table table-striped table-condensed">
 <tr><th>&nbsp;</th><th>Assistance</th><th>Value</th><th>Date Provided</th><th>Pending</th>
     <th>Promised Date</th><th>Chk Req</th><th>Chk/Conf Nbr</th><th>Notes</th><th>&nbsp;</th></tr>
@@ -98,6 +145,15 @@ def main():
                           pending="No", notes="svdp:s=01JBQTESTSESSION;i=giftcard — SVdP delivery")
             + ITEM.format(name="Gift Cards", value="50.00", date="01/03/2026",
                           pending="No", notes=""))))
+    # Columns are resolved by header text, so an inserted column must not shift
+    # the meaning of Age.
+    (OUT / "detail_members_shifted.html").write_text(
+        detail_page(members=members_html(extra_column="Nickname")))
+    # A household with an unrecorded age, and one with nobody but the neighbour.
+    (OUT / "detail_members_sparse.html").write_text(detail_page(members=members_html(
+        rows=[("Ada", "Nakamura", "Self", "63"), ("Wren", "Nakamura", "Grandchild", "")])))
+    (OUT / "detail_members_absent.html").write_text(detail_page(members=""))
+
     for p in sorted(OUT.glob("*.html")):
         print(f"  {p.relative_to(OUT.parent.parent)}  {p.stat().st_size}B")
 

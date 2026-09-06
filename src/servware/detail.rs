@@ -6,6 +6,7 @@
 //! unlike the list endpoint it works regardless of status, so a completed
 //! request can still be read back. See DECISIONS.md D7.
 
+use scraper::ElementRef;
 use scraper::Html;
 use scraper::Selector;
 
@@ -25,6 +26,37 @@ pub struct RequestDetail {
     pub form: Form,
     pub assistance_items: Vec<AssistanceItemRow>,
     pub members: Vec<Member>,
+    pub household_members: Vec<HouseholdMember>,
+}
+
+/// A person living in the neighbour's household.
+///
+/// Not to be confused with [`Member`], which is an SVdP *volunteer*. ServWare
+/// uses "member" for both, which is exactly why this type spells it out.
+///
+/// `age` is what ServWare renders — an integer it computes server-side. There is
+/// no per-person birthdate on the page, which suits us: exports carry ages and
+/// never dates of birth. See DECISIONS.md D21.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HouseholdMember {
+    pub first_name: String,
+    pub last_name: String,
+    pub relationship: String,
+    pub age: Option<u32>,
+}
+
+impl HouseholdMember {
+    /// Whether this row is the neighbour themselves rather than a dependant.
+    ///
+    /// **Verified false for every row at this conference.** Across 139 real
+    /// households the table listed only *other* people, and
+    /// `calculatedHouseholdCount` was the row count plus one in all 139 cases —
+    /// so ServWare adds the neighbour separately and there is no "Self" row to
+    /// exclude. Kept because another conference may record one, and because a
+    /// household size derived from these rows must add one. See DECISIONS.md D19.
+    pub fn is_self(&self) -> bool {
+        self.relationship.eq_ignore_ascii_case("self")
+    }
 }
 
 /// A volunteer, as rendered in the assignment dropdown.
@@ -64,6 +96,7 @@ pub fn parse(id: u64, html: &str) -> Result<RequestDetail> {
     Ok(RequestDetail {
         id,
         members: parse_members(html),
+        household_members: parse_household_members(html),
         assistance_items: parse_assistance_items(html),
         form,
     })
@@ -178,6 +211,70 @@ fn parse_assistance_items(html: &str) -> Vec<AssistanceItemRow> {
             })
         })
         .collect()
+}
+
+/// The household-members table, from the "Household Members" tab.
+///
+/// Every tab on the detail page is server-rendered inline, so this needs no XHR
+/// and costs nothing beyond the page we already fetch. See DECISIONS.md D19.
+///
+/// The table also carries SSN (Last 4), Drivers License/ID, Phone and Notes
+/// columns. Those cells are **never read out of the DOM** — only the four
+/// wanted columns are addressed by index, so their contents cannot reach a
+/// string, a log line, or a CSV even by accident. `tests/detail_parsing.rs`
+/// pins that.
+fn parse_household_members(html: &str) -> Vec<HouseholdMember> {
+    let doc = Html::parse_document(html);
+    let table_sel = Selector::parse("#tabs-familymembers table").expect("static selector");
+    let header = Selector::parse("th").expect("static selector");
+    let row = Selector::parse("tr").expect("static selector");
+    let cell = Selector::parse("td").expect("static selector");
+
+    let Some(table) = doc.select(&table_sel).next() else {
+        return Vec::new();
+    };
+
+    // Columns are found by header text, never by position: the page has no
+    // per-row ids, and a column inserted upstream must not silently turn the
+    // driver's-licence column into "age".
+    let columns: Vec<String> = table
+        .select(&header)
+        .map(|h| h.text().collect::<String>().trim().to_lowercase())
+        .collect();
+    let index_of = |name: &str| columns.iter().position(|c| c == name);
+    let (i_first, i_relationship, i_age) = match (
+        index_of("first name"),
+        index_of("relationship"),
+        index_of("age"),
+    ) {
+        (Some(f), Some(r), Some(a)) => (f, r, a),
+        _ => return Vec::new(),
+    };
+    let i_last = index_of("last name");
+
+    table
+        .select(&row)
+        .filter_map(|r| {
+            let first_name = nth_cell(r, &cell, i_first)?;
+            if first_name.is_empty() {
+                return None;
+            }
+            Some(HouseholdMember {
+                first_name,
+                last_name: i_last.and_then(|i| nth_cell(r, &cell, i)).unwrap_or_default(),
+                relationship: nth_cell(r, &cell, i_relationship).unwrap_or_default(),
+                age: nth_cell(r, &cell, i_age).and_then(|a| a.parse().ok()),
+            })
+        })
+        .collect()
+}
+
+/// Text of one cell, addressed by index. Cells before it are walked but never
+/// read; cells after it are never touched.
+fn nth_cell(row: ElementRef<'_>, cell: &Selector, index: usize) -> Option<String> {
+    row.select(cell)
+        .nth(index)
+        .map(|c| c.text().collect::<String>().trim().to_string())
 }
 
 /// Our tag looks like `svdp:s=<session>;i=<slot>` at the start of the notes.

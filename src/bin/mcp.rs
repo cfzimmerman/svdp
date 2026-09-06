@@ -28,7 +28,11 @@ use rmcp::transport::stdio;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use svdp::domain::export;
+use svdp::domain::export::ExportDir;
+use svdp::domain::export::HouseholdRoster;
 use svdp::domain::policy::ConferenceConfig;
+use svdp::domain::pull;
 use svdp::domain::session::Delivery;
 use svdp::domain::session::DeliveryOutcome;
 use svdp::domain::session::DeliverySession;
@@ -41,6 +45,7 @@ use svdp::servware::write::ServWareBackend;
 use svdp::servware::client::Credentials;
 use svdp::servware::client::PUBLIC_BASE_URL;
 use svdp::servware::client::ServWareClient;
+use svdp::servware::clients;
 use svdp::servware::detail;
 use svdp::servware::error::ServWareError;
 use svdp::servware::list;
@@ -120,6 +125,34 @@ struct OpenRequestView {
 struct RequestIdParams {
     /// The ServWare request id, as shown by `list_open_requests`.
     request_id: u64,
+}
+
+/// A date range over when families asked for help.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct WindowParams {
+    /// Start of the range, as MM/DD/YYYY. Leave it out to include the whole history.
+    from: Option<String>,
+    /// End of the range, as MM/DD/YYYY. Leave it out for "up to today".
+    to: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MembersParams {
+    /// Start of the range, as MM/DD/YYYY. Strongly recommended: without it this
+    /// looks up every household that has ever made a request.
+    from: Option<String>,
+    /// End of the range, as MM/DD/YYYY.
+    to: Option<String>,
+    /// How many households to look up at most. Each one is a separate request to
+    /// ServWare, so raise this only when the volunteer has asked for a bigger pull.
+    max_households: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ReadExportParams {
+    /// Name of a file a previous export wrote, such as
+    /// "svdp-neighbors-2026-09-06.csv". Leave it out to see what is available.
+    file: Option<String>,
 }
 
 #[tool_router]
@@ -245,6 +278,109 @@ impl Svdp {
                 Ok(ok(lines.join("\n")))
             }
             Err(e) => Ok(fail(&e)),
+        }
+    }
+
+    /// Saves every neighbour in the conference to a spreadsheet on the Desktop:
+    /// names, addresses, phone numbers, language, and when they last asked for
+    /// help. Use for any question about who the conference serves. Cheap.
+    #[tool(name = "export_neighbors", annotations(read_only_hint = true))]
+    async fn export_neighbors(&self) -> Result<CallToolResult, ErrorData> {
+        let rows = match clients::fetch_all(&self.client).await {
+            Ok(r) => r,
+            Err(e) => return Ok(fail(&e)),
+        };
+        Ok(save(&export::neighbors_table(&rows), None))
+    }
+
+    /// Saves assistance requests in a date range to a spreadsheet on the Desktop:
+    /// who asked, when, household size, and how much was given. Join it to the
+    /// neighbours file on client_id. Cheap.
+    #[tool(name = "export_requests", annotations(read_only_hint = true))]
+    async fn export_requests(
+        &self,
+        Parameters(p): Parameters<WindowParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (from, to) = match window(p.from.as_deref(), p.to.as_deref()) {
+            Ok(w) => w,
+            Err(msg) => return Ok(complain(msg)),
+        };
+        let budget = if from.is_some() { 12 } else { 20 };
+        let rows =
+            match list::fetch_window(&self.client, StatusFilter::Any, from, to, budget).await {
+                Ok(r) => r,
+                Err(e) => return Ok(fail(&e)),
+            };
+        Ok(save(&export::requests_table(&rows), None))
+    }
+
+    /// Saves everyone living in each household — first name, relationship and
+    /// AGE — to a spreadsheet on the Desktop. This is the only way to find out
+    /// how old a family's children are. Join it to the other files on client_id.
+    ///
+    /// SLOW: it opens one page per household, so tell the volunteer it will take
+    /// a minute and always give a date range.
+    #[tool(name = "export_household_members")]
+    async fn export_household_members(
+        &self,
+        Parameters(p): Parameters<MembersParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (from, to) = match window(p.from.as_deref(), p.to.as_deref()) {
+            Ok(w) => w,
+            Err(msg) => return Ok(complain(msg)),
+        };
+        let max = p.max_households.unwrap_or(pull::DEFAULT_MAX_HOUSEHOLDS);
+        let (households, stats) =
+            match pull::household_members(&self.client, from, to, max).await {
+                Ok(r) => r,
+                Err(e) => return Ok(fail(&e)),
+            };
+        let rosters: Vec<HouseholdRoster<'_>> = households
+            .iter()
+            .map(|h| HouseholdRoster {
+                client_id: h.client_id,
+                household_last_name: &h.last_name,
+                members: &h.members,
+            })
+            .collect();
+        let note = format!(
+            "Looked up {} households in {} visits to ServWare{}.",
+            stats.households,
+            stats.servware_requests,
+            if stats.without_members > 0 {
+                format!("; {} had nobody listed", stats.without_members)
+            } else {
+                String::new()
+            }
+        );
+        Ok(save(&export::members_table(&rosters), Some(note)))
+    }
+
+    /// Reads one of the exported spreadsheets back so it can be analysed here.
+    /// Call it with no file name to see which exports exist.
+    #[tool(name = "read_export", annotations(read_only_hint = true))]
+    async fn read_export(
+        &self,
+        Parameters(p): Parameters<ReadExportParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let dir = match ExportDir::desktop() {
+            Ok(d) => d,
+            Err(e) => return Ok(complain(e.to_string())),
+        };
+        let Some(file) = p.file.as_deref().map(str::trim).filter(|f| !f.is_empty()) else {
+            let listing = dir.list();
+            if listing.is_empty() {
+                return Ok(ok("There are no exported spreadsheets yet."));
+            }
+            let lines: Vec<String> = listing
+                .iter()
+                .map(|(n, bytes)| format!("  {n}  ({bytes} bytes)"))
+                .collect();
+            return Ok(ok(format!("Exports on the Desktop:\n{}", lines.join("\n"))));
+        };
+        match dir.read(file, READ_EXPORT_MAX_BYTES) {
+            Ok(text) => Ok(ok(text)),
+            Err(e) => Ok(complain(e.to_string())),
         }
     }
 
@@ -552,6 +688,62 @@ fn render_plan(session: &DeliverySession, _config: &ConferenceConfig) -> String 
     out
 }
 
+/// Above this a spreadsheet is too big to pull into the conversation usefully.
+const READ_EXPORT_MAX_BYTES: u64 = 512 * 1024;
+
+/// Parse a date window from what the model supplied.
+fn window(
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<(Option<chrono::NaiveDate>, Option<chrono::NaiveDate>), String> {
+    let parse = |raw: Option<&str>, which: &str| match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(s) => list::parse_date(s).map(Some).ok_or_else(|| {
+            format!("I could not read {which} date {s:?}. Dates look like 06/01/2026.")
+        }),
+    };
+    Ok((parse(from, "the start")?, parse(to, "the end")?))
+}
+
+/// Write a table to the Desktop and describe it, without putting any of its rows
+/// into the conversation. Rows arrive only when someone calls `read_export`.
+fn save(table: &export::Table, note: Option<String>) -> CallToolResult {
+    let dir = match ExportDir::desktop() {
+        Ok(d) => d,
+        Err(e) => return complain(e.to_string()),
+    };
+    let path = match dir.write(table, chrono::Local::now().date_naive()) {
+        Ok(p) => p,
+        Err(e) => return complain(e.to_string()),
+    };
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mut lines = Vec::new();
+    if let Some(note) = note {
+        lines.push(note);
+    }
+    lines.push(format!(
+        "Saved {} rows to {} on the Desktop.",
+        table.len(),
+        name
+    ));
+    lines.push(format!("Columns: {}.", table.header.join(", ")));
+    lines.push(
+        "It holds real family information, so keep it on this computer. \
+         To work with it here, ask to read it back."
+            .to_string(),
+    );
+    ok(lines.join("\n"))
+}
+
+/// Something the volunteer did wrong or a file we cannot use — not a ServWare
+/// failure, so it carries no `ServWareError` and needs no log line.
+fn complain(text: impl Into<String>) -> CallToolResult {
+    CallToolResult::error(vec![ContentBlock::text(text)])
+}
+
 fn ok(text: impl Into<String>) -> CallToolResult {
     CallToolResult::success(vec![ContentBlock::text(text)])
 }
@@ -582,6 +774,17 @@ impl Svdp {
         Ok(vec![PromptMessage::new_text(
             rmcp::model::Role::User,
             "Show me the SVdP families with open requests, longest waiting first,              with the gift card amount each household size calls for.",
+        )])
+    }
+
+    /// Pull SVdP neighbour information into a spreadsheet
+    #[prompt(name = "pull_neighbor_data")]
+    async fn pull_neighbor_data_prompt(&self) -> Result<Vec<PromptMessage>, ErrorData> {
+        Ok(vec![PromptMessage::new_text(
+            rmcp::model::Role::User,
+            "I need a list of SVdP families for a project. Ask me what the project \
+             needs and what date range counts as recent, then pull the information \
+             into spreadsheets on my Desktop and help me work out the answer.",
         )])
     }
 

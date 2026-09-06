@@ -32,6 +32,16 @@ pub struct RequestSummary {
     pub calculated_household_count: u32,
     pub client: ClientSummary,
 
+    // Export-only breakdowns. These default rather than being required because
+    // nothing computes money from them -- a blank column in a spreadsheet is a
+    // visible absence, unlike a silent `0` feeding the gift-card ladder.
+    #[serde(default)]
+    pub calculated_adult_count: u32,
+    #[serde(default)]
+    pub calculated_child_count: u32,
+    #[serde(default)]
+    pub assistance_items: Vec<AssistanceItemSummary>,
+
     // Presentational; safe to default because nothing numeric depends on them.
     #[serde(default)]
     pub street_address_line1: String,
@@ -55,7 +65,22 @@ pub struct ClientSummary {
     pub mobile_phone: String,
 }
 
+/// An assistance item as the list endpoint nests it. Export-only.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistanceItemSummary {
+    #[serde(default)]
+    pub monetary_value: f64,
+    #[serde(default)]
+    pub date_provided: String,
+}
+
 impl RequestSummary {
+    /// Total dollars recorded against this request.
+    pub fn assistance_total(&self) -> f64 {
+        self.assistance_items.iter().map(|i| i.monetary_value).sum()
+    }
+
     pub fn display_name(&self) -> String {
         format!("{} {}", self.client.first_name, self.client.last_name)
             .trim()
@@ -103,6 +128,25 @@ impl StatusFilter {
     }
 }
 
+/// Which end of the `dateRequested` ordering to start from.
+///
+/// `Desc` exists so a date-windowed pull can stop as soon as it walks past the
+/// start of the window, instead of paging the whole history to find it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDir {
+    Asc,
+    Desc,
+}
+
+impl SortDir {
+    fn as_param(self) -> &'static str {
+        match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        }
+    }
+}
+
 const PAGE_SIZE: u32 = 100;
 
 /// Refuse to walk more pages than this without an explicit opt-in.
@@ -133,7 +177,7 @@ pub async fn fetch_all_paged(
     let mut pages = 0u32;
 
     loop {
-        let envelope = fetch_page(client, filter, start).await?;
+        let envelope = fetch_page(client, filter, start, SortDir::Asc).await?;
         pages += 1;
         let total = envelope.total_display_records;
         let returned = envelope.data.len();
@@ -177,6 +221,7 @@ async fn fetch_page(
     client: &ServWareClient,
     filter: StatusFilter,
     start: u32,
+    sort: SortDir,
 ) -> Result<Envelope> {
     let columns = "id,id,status,dateRequested,client.lastName,client.firstName,\
                    requestAssignedToMember,streetAddressLine1,client.homePhone,\
@@ -188,7 +233,7 @@ async fn fetch_page(
         ("iDisplayStart", start.to_string()),
         ("iDisplayLength", PAGE_SIZE.to_string()),
         ("iSortCol_0", "3".to_string()),
-        ("sSortDir_0", "asc".to_string()),
+        ("sSortDir_0", sort.as_param().to_string()),
         ("iSortingCols", "1".to_string()),
         ("sSearch", String::new()),
         ("bRegex", "false".to_string()),
@@ -221,7 +266,7 @@ async fn fetch_page(
 
 /// Remove null-valued keys so `#[serde(default)]` applies to optional fields.
 /// Required fields are unaffected and still fail when genuinely absent.
-fn strip_nulls(value: &mut serde_json::Value) {
+pub(crate) fn strip_nulls(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             map.retain(|_, v| !v.is_null());
@@ -231,5 +276,89 @@ fn strip_nulls(value: &mut serde_json::Value) {
         }
         serde_json::Value::Array(items) => items.iter_mut().for_each(strip_nulls),
         _ => {}
+    }
+}
+
+/// Parse a ServWare date. Every date on the wire is `MM/DD/YYYY`.
+pub fn parse_date(s: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(s.trim(), "%m/%d/%Y").ok()
+}
+
+/// Whether a request's date falls inside an inclusive window. An unparseable or
+/// missing date is kept: dropping a row because we could not read its date would
+/// silently shrink an export.
+pub fn in_window(
+    date_requested: &str,
+    from: Option<chrono::NaiveDate>,
+    to: Option<chrono::NaiveDate>,
+) -> bool {
+    let Some(d) = parse_date(date_requested) else {
+        return true;
+    };
+    from.is_none_or(|f| d >= f) && to.is_none_or(|t| d <= t)
+}
+
+/// Whether a page fetched newest-first has walked past the start of the window,
+/// so paging can stop. Rows with unreadable dates never trigger a stop.
+fn page_is_past(rows: &[RequestSummary], from: Option<chrono::NaiveDate>) -> bool {
+    let Some(from) = from else {
+        return false;
+    };
+    rows.iter()
+        .filter_map(|r| parse_date(&r.date_requested))
+        .next_back()
+        .is_some_and(|oldest| oldest < from)
+}
+
+/// Fetch requests whose `dateRequested` falls in an inclusive window.
+///
+/// Walks newest-first and stops at the far edge of the window, so a three-month
+/// pull costs a handful of requests rather than the whole history. With no
+/// `from` this is a full-history walk and the caller must have decided that is
+/// what it wants -- `max_pages` still bounds it.
+pub async fn fetch_window(
+    client: &ServWareClient,
+    filter: StatusFilter,
+    from: Option<chrono::NaiveDate>,
+    to: Option<chrono::NaiveDate>,
+    max_pages: u32,
+) -> Result<Vec<RequestSummary>> {
+    let mut out: Vec<RequestSummary> = Vec::new();
+    let mut start = 0u32;
+    let mut pages = 0u32;
+
+    loop {
+        let envelope = fetch_page(client, filter, start, SortDir::Desc).await?;
+        pages += 1;
+        let total = envelope.total_display_records;
+        let returned = envelope.data.len();
+
+        let mut page: Vec<RequestSummary> = Vec::with_capacity(returned);
+        for mut raw in envelope.data {
+            strip_nulls(&mut raw);
+            let summary: RequestSummary = serde_json::from_value(raw).map_err(|e| {
+                ServWareError::Malformed(format!(
+                    "ServWare's request format changed — {e}. This tool needs an update."
+                ))
+            })?;
+            page.push(summary);
+        }
+
+        let past = page_is_past(&page, from);
+        out.extend(
+            page.into_iter()
+                .filter(|r| in_window(&r.date_requested, from, to)),
+        );
+
+        if past || returned == 0 || start + PAGE_SIZE >= total {
+            return Ok(out);
+        }
+        if max_pages != 0 && pages >= max_pages {
+            return Err(ServWareError::Malformed(format!(
+                "ServWare has {total} requests in total and the window is still open after                  {pages} pages ({} rows kept). Narrow the date range.",
+                out.len()
+            )));
+        }
+        start += PAGE_SIZE;
     }
 }
