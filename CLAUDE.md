@@ -5,6 +5,29 @@ Guidance for Claude Code working in this repository.
 **Keep this file updated** with project purpose, decisions, and user feedback so context
 carries across sessions.
 
+## Log decisions and discoveries
+
+`DECISIONS.md` is the trail of intent: why the project is shaped as it is, including the
+**rejected alternatives** and the reason they lost. Read it before proposing a change to the
+architecture — most of the obvious-looking alternatives have already been considered and ruled
+out for reasons that are not obvious.
+
+Append to it as part of the work, not as a cleanup pass afterward:
+
+- A **decision** gets an entry with its rationale and what was rejected. A decision without its
+  rationale gets re-litigated.
+- A **discovery** — something established by running it and observing the result, especially
+  where it contradicts documentation or intuition — gets an entry with how it was verified, so a
+  later session can re-verify rather than trust blindly.
+- When a finding **overturns an earlier claim, including one of your own**, say so explicitly.
+  The correction is the valuable part.
+
+## Git
+
+**Do not make git writes.** No `commit`, `push`, `branch`, or `reset`, and do not offer to —
+Cory commits his own work. Read-only git (`status`, `log`, `diff`, `show`) is fine and useful.
+At a natural checkpoint, just say what changed.
+
 ## Project
 
 **Repository**: svdp (github.com/cfzimmerman/svdp) — **public**.

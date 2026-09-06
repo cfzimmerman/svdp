@@ -66,6 +66,24 @@ impl Form {
     }
 
     /// The name/value pairs a browser would submit, in document order.
+    /// Extract the first form that renders every one of `required`.
+    ///
+    /// Preferred over selecting by `id`: the page carries several modal forms
+    /// alongside the edit form, and identifying the real one by the controls it
+    /// contains survives ServWare renaming the element. (The live page uses
+    /// `id="editForm"`, which is not something to depend on.)
+    pub fn extract_containing(html: &str, required: &[&str]) -> Result<Self, FormError> {
+        let doc = Html::parse_document(html);
+        let sel = Selector::parse("form").map_err(|_| FormError::BadSelector("form".into()))?;
+        for element in doc.select(&sel) {
+            let candidate = Self { controls: collect_controls(element) };
+            if required.iter().all(|name| candidate.contains(name)) {
+                return Ok(candidate);
+            }
+        }
+        Err(FormError::NoMatch(format!("a form containing {required:?}")))
+    }
+
     pub fn pairs(&self) -> Vec<(String, String)> {
         self.controls
             .iter()

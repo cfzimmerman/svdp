@@ -10,7 +10,7 @@ const OPEN: &str = include_str!("fixtures/detail_open.html");
 const COMPLETED: &str = include_str!("fixtures/detail_completed.html");
 
 fn open_form() -> Form {
-    Form::extract(OPEN, "form#requestForm").expect("fixture has the request form")
+    Form::extract(OPEN, "form#editForm").expect("fixture has the request form")
 }
 
 /// The single highest-value test: an empty overlay must reproduce the form
@@ -77,7 +77,7 @@ fn select_uses_selected_option_then_falls_back_to_first() {
     let f = open_form();
     assert_eq!(f.get("status"), Some("Open"), "explicitly selected");
     assert_eq!(f.get("requestAssignedToMemberId"), Some(""), "first option when none selected");
-    let c = Form::extract(COMPLETED, "form#requestForm").unwrap();
+    let c = Form::extract(COMPLETED, "form#editForm").unwrap();
     assert_eq!(c.get("status"), Some("Completed"));
     assert_eq!(c.get("visitAssignedToMemberId"), Some("44270"));
 }
