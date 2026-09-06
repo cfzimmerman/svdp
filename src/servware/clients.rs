@@ -11,6 +11,7 @@
 //! the sort and search semantics. Field selection is enforced where it can be
 //! tested — the column allowlist in `domain::export`.
 
+use chrono::Datelike;
 use serde::Deserialize;
 
 use crate::servware::client::ServWareClient;
@@ -68,6 +69,11 @@ pub struct NeighborSummary {
     #[serde(default)]
     pub last_request_date: String,
 
+    /// Read only so an age can be derived. **Never exported** -- see
+    /// DECISIONS.md D21. Use `age_on` rather than touching this.
+    #[serde(default)]
+    birth_date: String,
+
     /// Hand-entered on the neighbour record; often null, in which case the
     /// request list's `calculated*` counts are the better source.
     #[serde(default)]
@@ -77,6 +83,17 @@ pub struct NeighborSummary {
 }
 
 impl NeighborSummary {
+    /// The neighbour's age, derived from a birth date that is never itself
+    /// emitted. The household members table lists everyone *but* the neighbour
+    /// (D19), so without this the head of household has no age anywhere -- which
+    /// the report volunteers use today does provide.
+    pub fn age_on(&self, today: chrono::NaiveDate) -> Option<u32> {
+        let dob = chrono::NaiveDate::parse_from_str(self.birth_date.trim(), "%m/%d/%Y").ok()?;
+        let had_birthday = (today.month(), today.day()) >= (dob.month(), dob.day());
+        let years = today.year() - dob.year() - i32::from(!had_birthday);
+        u32::try_from(years).ok().filter(|y| *y < 130)
+    }
+
     pub fn display_name(&self) -> String {
         format!("{} {}", self.first_name, self.last_name)
             .trim()

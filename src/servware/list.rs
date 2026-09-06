@@ -66,6 +66,11 @@ pub struct ClientSummary {
 }
 
 /// An assistance item as the list endpoint nests it. Export-only.
+///
+/// `date_provided` is when help actually reached the family, which is **not**
+/// the same as when they asked. ServWare's own Neighbor Assistance Summary
+/// report is built on this date, so any export claiming to answer "how much did
+/// this family receive between two dates" has to carry it. See DECISIONS.md D23.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistanceItemSummary {
@@ -73,6 +78,25 @@ pub struct AssistanceItemSummary {
     pub monetary_value: f64,
     #[serde(default)]
     pub date_provided: String,
+    #[serde(default)]
+    pub quantity: f64,
+    #[serde(default)]
+    pub pending: bool,
+    #[serde(default)]
+    pub assistance_type: Option<AssistanceTypeSummary>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistanceTypeSummary {
+    #[serde(default)]
+    pub name: String,
+}
+
+impl AssistanceItemSummary {
+    pub fn type_name(&self) -> &str {
+        self.assistance_type.as_ref().map_or("", |t| t.name.as_str())
+    }
 }
 
 impl RequestSummary {
@@ -157,6 +181,14 @@ const PAGE_SIZE: u32 = 100;
 /// so with `fetch_all_paged`.
 const DEFAULT_MAX_PAGES: u32 = 3;
 
+/// Page budget for a date-windowed pull.
+///
+/// Sixty pages is six thousand requests -- comfortably past the whole history
+/// (4,907 at the time of writing) so that "pull everything" works, while still
+/// refusing to run away if the conference grows an order of magnitude. The seek
+/// means a narrow window costs only the pages inside it regardless.
+pub const WINDOW_MAX_PAGES: u32 = 60;
+
 /// Fetch every matching request, following pagination to completion.
 pub async fn fetch_all(
     client: &ServWareClient,
@@ -206,10 +238,9 @@ pub async fn fetch_all_paged(
             return Ok(out);
         }
         if max_pages != 0 && pages >= max_pages {
-            return Err(ServWareError::Malformed(format!(
-                "ServWare has {total} matching requests, which is more than this tool \
-                 will page through ({} of {total} read in {pages} requests). Narrow the \
-                 filter rather than fetching everything.",
+            return Err(ServWareError::TooBroad(format!(
+                "There are {total} matching requests, which is more than this will read in \
+                 one go ({} read so far). Narrow it down rather than fetching everything.",
                 out.len()
             )));
         }
@@ -223,6 +254,16 @@ async fn fetch_page(
     start: u32,
     sort: SortDir,
 ) -> Result<Envelope> {
+    fetch_page_sized(client, filter, start, sort, PAGE_SIZE).await
+}
+
+async fn fetch_page_sized(
+    client: &ServWareClient,
+    filter: StatusFilter,
+    start: u32,
+    sort: SortDir,
+    length: u32,
+) -> Result<Envelope> {
     let columns = "id,id,status,dateRequested,client.lastName,client.firstName,\
                    requestAssignedToMember,streetAddressLine1,client.homePhone,\
                    client.mobilePhone,pendingItems,id";
@@ -231,7 +272,7 @@ async fn fetch_page(
         ("iColumns", "12".to_string()),
         ("sColumns", columns.to_string()),
         ("iDisplayStart", start.to_string()),
-        ("iDisplayLength", PAGE_SIZE.to_string()),
+        ("iDisplayLength", length.to_string()),
         ("iSortCol_0", "3".to_string()),
         ("sSortDir_0", sort.as_param().to_string()),
         ("iSortingCols", "1".to_string()),
@@ -310,12 +351,80 @@ fn page_is_past(rows: &[RequestSummary], from: Option<chrono::NaiveDate>) -> boo
         .is_some_and(|oldest| oldest < from)
 }
 
+/// The row at one offset, fetched as cheaply as the endpoint allows.
+///
+/// Used to find where a date window begins without dragging back the pages in
+/// front of it. Each probe returns a single record instead of a hundred.
+async fn probe_date(
+    client: &ServWareClient,
+    filter: StatusFilter,
+    offset: u32,
+) -> Result<Option<chrono::NaiveDate>> {
+    let envelope = fetch_page_sized(client, filter, offset, SortDir::Desc, 1).await?;
+    let Some(raw) = envelope.data.first() else {
+        return Ok(None);
+    };
+    Ok(raw
+        .get("dateRequested")
+        .and_then(|v| v.as_str())
+        .and_then(parse_date))
+}
+
+/// Binary-search for the first offset inside the window.
+///
+/// Rows come back newest-first, so `dateRequested` decreases monotonically with
+/// offset and "is this row at or before the end of the window?" flips exactly
+/// once. Reaching a window a year back would otherwise mean pulling every newer
+/// page in full -- around a dozen hundred-record responses thrown away. Returns
+/// the offset to start paging from, and how many probes it cost.
+async fn seek_window_start(
+    client: &ServWareClient,
+    filter: StatusFilter,
+    to: Option<chrono::NaiveDate>,
+    total: u32,
+) -> Result<(u32, u32)> {
+    let Some(to) = to else {
+        return Ok((0, 0));
+    };
+    if total <= PAGE_SIZE {
+        return Ok((0, 0));
+    }
+
+    // The common case is a recent window, where the newest request is already
+    // inside it and no search is needed.
+    let mut probes = 1;
+    match probe_date(client, filter, 0).await? {
+        Some(newest) if newest <= to => return Ok((0, probes)),
+        None => return Ok((0, probes)), // unreadable date; do not skip anything
+        _ => {}
+    }
+
+    let (mut lo, mut hi) = (0u32, total - 1);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        probes += 1;
+        match probe_date(client, filter, mid).await? {
+            Some(d) if d <= to => hi = mid,
+            Some(_) => lo = mid + 1,
+            // A row we cannot read a date for makes the search unsound, so give
+            // up on skipping and walk from the top.
+            None => return Ok((0, probes)),
+        }
+    }
+
+    // Start a whole page early: rows sharing the boundary date may sit just
+    // before the offset we found, and re-reading one page is cheap insurance.
+    Ok((
+        (lo / PAGE_SIZE).saturating_sub(1) * PAGE_SIZE,
+        probes,
+    ))
+}
+
 /// Fetch requests whose `dateRequested` falls in an inclusive window.
 ///
-/// Walks newest-first and stops at the far edge of the window, so a three-month
-/// pull costs a handful of requests rather than the whole history. With no
-/// `from` this is a full-history walk and the caller must have decided that is
-/// what it wants -- `max_pages` still bounds it.
+/// Walks newest-first, skips ahead to where the window begins, and stops at its
+/// far edge. With no `from` this is a full-history walk and the caller must have
+/// decided that is what it wants -- `max_pages` still bounds it.
 pub async fn fetch_window(
     client: &ServWareClient,
     filter: StatusFilter,
@@ -323,11 +432,22 @@ pub async fn fetch_window(
     to: Option<chrono::NaiveDate>,
     max_pages: u32,
 ) -> Result<Vec<RequestSummary>> {
+    let total = fetch_page_sized(client, filter, 0, SortDir::Desc, 1)
+        .await?
+        .total_display_records;
+    let (mut start, probes) = seek_window_start(client, filter, to, total).await?;
+    tracing::info!(total, start, probes, "seeking date window");
+
     let mut out: Vec<RequestSummary> = Vec::new();
-    let mut start = 0u32;
     let mut pages = 0u32;
 
     loop {
+        if pages > 0 {
+            // Unhurried on purpose. With no date range this walks the whole
+            // history, which is the one place a single command becomes fifty
+            // hundred-record requests against somebody's production server.
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        }
         let envelope = fetch_page(client, filter, start, SortDir::Desc).await?;
         pages += 1;
         let total = envelope.total_display_records;

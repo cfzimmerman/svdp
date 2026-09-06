@@ -90,10 +90,23 @@ Three grains, all joinable on `client_id`, written to the Desktop as CSV:
 |---|---|---|---|
 | `neighbors` | household | `/app/clients/list` | ~5 JSON pages |
 | `requests` | assistance request | `/app/assistancerequests/list`, date-windowed | a few pages |
+| `assistance` | assistance **item**, with `date_provided` | same pull as `requests` | free |
 | `household-members` | person, **with age** | request detail pages | one page per household |
 
 Project-specific knowledge lives in `skills/pulling-svdp-data/references/`, deliberately
 overfit, because markdown gets edited next season rather than recompiled.
+
+**Exports carry recorded fact, never derived policy.** The gift-card ladder and the food amount
+are a *delivery* decision; what another program spends is the volunteer's call. `domain::export`
+and `domain::pull` must never import `domain::policy`, and a test fails if they do. Likewise
+nothing caps a household: the spreadsheet this replaces held four children and dropped the rest.
+See DECISIONS.md D24.
+
+**`date_requested` and `date_provided` are different questions.** ServWare's own Neighbor
+Assistance Summary report keys on when help was *given*; the window filter here keys on when a
+family *asked*. Reconciling against a real volunteer spreadsheet, request-date totals overshot
+hers for 15 households while assistance-date totals overshot for none. Use the `assistance`
+table for "what did they receive between two dates". See DECISIONS.md D23.
 
 ### Form handling — the load-bearing piece
 
@@ -147,6 +160,11 @@ Rules encoded there, verified against a real capture:
   whole conference roster (`iTotalRecords: 416` at Nativity) as complete Client objects.
   `/app/clients/{id}` is *not* usable for household members: its roster div is XHR-filled.
 - The ~24 report routes exist and are **deliberately unexplored**; `api.md` §12 lists them.
+- **Reaching an old date window needs a seek.** Rows come back newest-first, so a window a year
+  back sits behind ~1,200 newer requests. `list::seek_window_start` binary-searches for it with
+  single-row probes. The conference had 4,907 requests total in September 2026.
+- Validated against a volunteer's hand-built 2025 spreadsheet: child ages reconcile at 97%, head
+  ages at 99%, and nothing in her file exceeds what this tool finds. See DECISIONS.md D23.
 - ServWare sessions expire after 3600s; long delivery-night chats will cross that, so
   transparent re-auth is a functional requirement.
 

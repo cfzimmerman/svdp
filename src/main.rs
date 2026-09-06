@@ -358,17 +358,17 @@ async fn main() -> anyhow::Result<()> {
 
         Command::ExportNeighbors { out } => {
             let rows = clients::fetch_all(&client).await?;
-            let table = export::neighbors_table(&rows);
+            let table = export::neighbors_table(&rows, chrono::Local::now().date_naive());
             write_export(&table, out)?;
         }
 
         Command::ExportRequests { from, to, out } => {
             let from = parse_arg_date(from.as_deref(), "--from")?;
             let to = parse_arg_date(to.as_deref(), "--to")?;
-            let budget = if from.is_some() { 12 } else { 20 };
+            let budget = list::WINDOW_MAX_PAGES;
             let rows = list::fetch_window(&client, StatusFilter::Any, from, to, budget).await?;
-            let table = export::requests_table(&rows);
-            write_export(&table, out)?;
+            write_export(&export::requests_table(&rows), out.clone())?;
+            write_export(&export::assistance_table(&rows), out)?;
         }
 
         Command::ExportHouseholdMembers { from, to, max_households, out } => {

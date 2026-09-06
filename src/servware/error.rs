@@ -36,6 +36,13 @@ pub enum ServWareError {
     #[error("could not read ServWare's response: {0}")]
     Malformed(String),
 
+    /// The request was legitimate but asks for more than this will fetch in one
+    /// go. Distinct from `Malformed` because nothing is wrong: the message is
+    /// guidance for the person, so it reaches them verbatim rather than being
+    /// replaced by "something went wrong".
+    #[error("{0}")]
+    TooBroad(String),
+
     #[error("could not reach ServWare: {0}")]
     Transport(#[from] reqwest::Error),
 }
@@ -81,6 +88,9 @@ impl ServWareError {
                  Nothing was written."
                     .into()
             }
+            // Already written for a volunteer to read, and it says what to do
+            // next, so it must not be flattened into a generic failure.
+            Self::TooBroad(msg) => msg.clone(),
             Self::Transport(_) => {
                 "Could not reach ServWare. Check the internet connection.".into()
             }

@@ -65,15 +65,14 @@ pub async fn household_members(
 ) -> Result<(Vec<Household>, PullStats)> {
     let max = max_households.min(HARD_MAX_HOUSEHOLDS);
 
-    // A full-history walk still has to be bounded; 20 pages is 2000 requests.
-    let page_budget = if from.is_some() { 12 } else { 20 };
-    let requests = list::fetch_window(client, StatusFilter::Any, from, to, page_budget).await?;
+    let requests =
+        list::fetch_window(client, StatusFilter::Any, from, to, list::WINDOW_MAX_PAGES).await?;
     let list_pages = requests.len().div_ceil(100).max(1);
 
     let latest = latest_per_household(&requests);
     if latest.len() as u32 > max {
-        return Err(ServWareError::Malformed(format!(
-            "that date range covers {} households, which is more than this will look up in \
+        return Err(ServWareError::TooBroad(format!(
+            "That date range covers {} households, which is more than this will look up in \
              one go ({max}). Ask for a shorter date range, or say explicitly how many \
              households to allow — but every one is a separate request to ServWare.",
             latest.len()

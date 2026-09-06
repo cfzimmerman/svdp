@@ -35,6 +35,7 @@ kind of question, and they line up with each other by household.
 |---|---|---|---|
 | `export_neighbors` | `svdp-neighbors-<date>.csv` | household | fast |
 | `export_requests` | `svdp-requests-<date>.csv` | request for help | fast |
+| `export_requests` | `svdp-assistance-<date>.csv` | **item of help given** | same pull |
 | `export_household_members` | `svdp-household-members-<date>.csv` | **person, with their age** | slow |
 
 Every file has a `client_id` column. That is the same household in all three, which is how you
@@ -70,6 +71,29 @@ These are verified against the live system. Do not assume otherwise.
   unknown, never as zero.
 - **`calculated_child_count`** on the requests file counts children without saying how old they
   are. It is useful for spotting the households above, not for filtering by age.
+- **"When they asked" and "when they got help" are different dates.** The date range filters on
+  when a family asked. If the question is how much a family *received* in a period — the way the
+  conference's own assistance summary counts it — use `date_provided` in the assistance file, not
+  `date_requested`. A single request can carry food given one week and a gift card the next.
+- **Pull fresh.** Deliveries get entered days after they happen, so a spreadsheet from last month
+  understates recent help. When someone shows you an older export, offer to re-pull rather than
+  reasoning from it.
+
+## Rules that do not bend
+
+- **Never put a dollar figure on a family.** The weekly delivery amounts — $70 of food, a gift
+  card set by household size — are a *delivery* policy and have nothing to do with a Christmas
+  program or any other project. What a project spends per family is a decision for the people
+  running it, and they will tell you if they want help with the arithmetic. Do not suggest a
+  number, do not scale one from household size, and do not carry a delivery amount across.
+- **Money in these files is history, not a plan.** `monetary_value` and
+  `assistance_total_dollars` are what ServWare records as already given. Use them to answer
+  "what has this family received"; never present them as what a family should get.
+- **Never truncate a family.** If a household has nine people, report nine. Old spreadsheets had
+  room for four children and quietly dropped the rest; that is a limitation of paper, not of the
+  data, and repeating it would put real children out of view.
+- **Say what you do not know.** A blank age is unknown, not zero. A household with no roster is
+  unanswered, not childless.
 
 ## Talking about a slow pull
 

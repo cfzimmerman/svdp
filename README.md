@@ -83,16 +83,20 @@ then help you work out the answer. Three files are available:
 | File | One row per | What it is for |
 |---|---|---|
 | `svdp-neighbors-<date>.csv` | family | everyone the conference serves: name, address, phones |
-| `svdp-requests-<date>.csv` | request | who asked for help, when, and how much was given |
+| `svdp-requests-<date>.csv` | request | who asked for help, and when |
+| `svdp-assistance-<date>.csv` | item of help | what was given, and the date it was given |
 | `svdp-household-members-<date>.csv` | person | **everyone in each house, and their age** |
 
 The third one is the useful new thing — ages are not in any report ServWare can export, and until
 now the only way to get them was to open each family's record and type them in.
 
-Two things worth knowing:
+Three things worth knowing:
 
 - **Looking up ages takes a minute or two.** Claude opens one page per family, so it will ask you
   to approve it and ask for a date range first. Giving a date range keeps it quick.
+- **"When they asked" and "when they got help" are different dates.** A family can ask in June and
+  get their gift card in July. Totals in the conference's own summary report count the date help
+  was *given*, which is the `svdp-assistance` file.
 - **Some families have no ages recorded.** ServWare lets a conference enter either a head count
   *or* the individual people, not both, so families entered as a head count have no ages in the
   system at all. Claude will list those separately rather than quietly leaving them out — they are

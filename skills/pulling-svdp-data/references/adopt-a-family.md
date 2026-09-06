@@ -24,8 +24,13 @@ Two files, in this order:
 2. `export_household_members` with the same date range — this is the ages. Warn them it takes a
    minute (see the main skill).
 
-You do not need `export_neighbors` unless they want email addresses or the language a family
+`export_requests` writes two files — one per request, one per item of help given. You do not need
+`export_neighbors` unless they want the head of household's age, email, or the language a family
 speaks; the requests file already carries name, address and both phone numbers.
+
+If they ask how much a family has received, total `monetary_value` in the **assistance** file by
+`date_provided`. That is how the conference's own summary report counts it, and it will not match
+a total taken from request dates.
 
 ## Work out the answer
 
@@ -34,6 +39,9 @@ Read both files back and compute — do not eyeball this.
 1. Group the member rows by `client_id`. Ignore rows with a blank age.
 2. For each household, sort the ages. The **youngest** is the smallest; the
    **second-youngest** is the next one, or blank if there is only one person listed.
+   These two columns are a convention carried over from her old spreadsheet, not a limit on the
+   data. **If a household has more than two children, say so and give all their ages** — the
+   previous sheet had room for four and larger families lost the rest.
 3. Keep households whose youngest is **13 or under**.
 4. Attach name, address and phones from the requests file, and count how many requests each
    household made in the window.
@@ -49,6 +57,11 @@ rather than quietly using it.
 mobile phone, number in family, number of children, requests in the window, youngest child's
 age, second-youngest child's age. Offer to save it as a spreadsheet.
 
+This mirrors the spreadsheet she built by hand, with two differences worth mentioning: her old
+sheet had room for four children per household and some families have more, and it had no column
+that ties a row back to ServWare, which is why matching families across sheets used to be manual.
+Every file here carries `client_id` for exactly that.
+
 **The families you could not answer for.** Households active in the window that have children
 according to `calculated_child_count` but produced **no rows** in the members file, because
 ServWare has only a head count for them. List these separately, by name, and say plainly:
@@ -57,6 +70,12 @@ checking by hand."* In a recent three-month window this was 8 households.
 
 Do not merge the two lists and do not leave the second one out. A family left off a Christmas
 list because a spreadsheet was quietly incomplete is the worst outcome this tool can produce.
+
+## Do not put a price on anyone
+
+This list says who to shop for. It says nothing about how much to spend, and neither should you.
+The weekly delivery amounts do not carry over to Christmas; that scale is set by whoever runs the
+program. If they ask for help budgeting, work from numbers they give you.
 
 ## Sanity check
 

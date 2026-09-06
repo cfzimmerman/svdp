@@ -149,6 +149,20 @@ def main():
     # the meaning of Age.
     (OUT / "detail_members_shifted.html").write_text(
         detail_page(members=members_html(extra_column="Nickname")))
+    # Deliberately larger than the four columns a hand-built spreadsheet had room
+    # for. Extraction must never saturate just because a human's layout did.
+    (OUT / "detail_members_large.html").write_text(detail_page(members=members_html(rows=[
+        ("Ana", "Bergstrom", "Spouse", "38"),
+        ("Bo", "Bergstrom", "Son", "17"),
+        ("Cleo", "Bergstrom", "Daughter", "15"),
+        ("Dov", "Bergstrom", "Son", "13"),
+        ("Esme", "Bergstrom", "Daughter", "11"),
+        ("Fen", "Bergstrom", "Son", "9"),
+        ("Gia", "Bergstrom", "Daughter", "6"),
+        ("Hal", "Bergstrom", "Son", "4"),
+        ("Ivy", "Bergstrom", "Daughter", "2"),
+        ("Jun", "Bergstrom", "Grandparent", "71"),
+    ])))
     # A household with an unrecorded age, and one with nobody but the neighbour.
     (OUT / "detail_members_sparse.html").write_text(detail_page(members=members_html(
         rows=[("Ada", "Nakamura", "Self", "63"), ("Wren", "Nakamura", "Grandchild", "")])))

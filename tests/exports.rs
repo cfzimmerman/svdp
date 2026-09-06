@@ -17,6 +17,7 @@ const OPEN: &str = include_str!("fixtures/detail_open.html");
 const SHIFTED: &str = include_str!("fixtures/detail_members_shifted.html");
 const SPARSE: &str = include_str!("fixtures/detail_members_sparse.html");
 const ABSENT: &str = include_str!("fixtures/detail_members_absent.html");
+const LARGE: &str = include_str!("fixtures/detail_members_large.html");
 
 /// Values planted in the fixture's SSN and driver's-licence cells. Nothing this
 /// tool produces may contain them.
@@ -91,6 +92,73 @@ fn identity_documents_never_leave_the_page() {
     }
 }
 
+/// Extraction must not saturate where a human layout did.
+///
+/// The spreadsheet this replaces had columns `C1`-`C4`, so a household was
+/// capped at four children and larger families silently lost some. Real data has
+/// households of ten, three of them with more than four children. Nothing in the
+/// parse or the CSV may impose a limit.
+#[test]
+fn a_large_household_is_not_truncated() {
+    let m = members(LARGE);
+    assert_eq!(m.len(), 10, "every member must survive parsing");
+
+    let table = export::members_table(&[HouseholdRoster {
+        client_id: 7,
+        household_last_name: "Bergstrom",
+        members: &m,
+    }]);
+    assert_eq!(table.len(), 10, "every member must survive the CSV");
+
+    let children = m.iter().filter(|p| p.age.is_some_and(|a| a <= 17)).count();
+    assert_eq!(children, 8, "eight under-18s, twice what C1-C4 could hold");
+
+    // One row per person and no cap, so the ages come out in full.
+    let mut ages: Vec<u32> = m.iter().filter_map(|p| p.age).collect();
+    ages.sort_unstable();
+    assert_eq!(ages, vec![2, 4, 6, 9, 11, 13, 15, 17, 38, 71]);
+}
+
+/// Raw data carries what ServWare recorded, never what this tool thinks a family
+/// should get.
+///
+/// The gift-card ladder is a *weekly delivery* policy. A Christmas program sets
+/// its own scale, and that decision belongs to the volunteer running it -- so no
+/// export may carry a suggested, computed, or policy-derived amount. The only
+/// money in an export is money ServWare says was actually given.
+#[test]
+fn exports_carry_recorded_money_only_never_a_suggested_amount() {
+    let banned = [
+        "suggested", "gift_card", "giftcard", "ladder", "budget",
+        "recommend", "allocation", "per_family", "should",
+    ];
+    for header in [
+        export::NEIGHBORS_HEADER,
+        export::REQUESTS_HEADER,
+        export::MEMBERS_HEADER,
+        export::ASSISTANCE_HEADER,
+    ] {
+        for column in header {
+            for bad in banned {
+                assert!(!column.contains(bad), "column {column:?} looks policy-derived ({bad:?})");
+            }
+        }
+    }
+
+    // And structurally: the export and pull layers must not reach for conference
+    // policy at all. This is the canary for someone later wiring the delivery
+    // ladder into a project export, which is the actual mistake to prevent.
+    for (name, src) in [
+        ("export.rs", include_str!("../src/domain/export.rs")),
+        ("pull.rs", include_str!("../src/domain/pull.rs")),
+    ] {
+        assert!(
+            !src.contains("domain::policy") && !src.contains("ConferenceConfig"),
+            "{name} reaches for conference policy; exports must stay raw"
+        );
+    }
+}
+
 /// Column sets are pinned so a new ServWare field cannot add a column by
 /// accident. Changing an export's shape should mean editing this list.
 #[test]
@@ -99,7 +167,7 @@ fn the_column_allowlist_is_pinned() {
         export::MEMBERS_HEADER,
         &["client_id", "household_last_name", "first_name", "relationship", "age"]
     );
-    assert_eq!(export::NEIGHBORS_HEADER.len(), 21);
+    assert_eq!(export::NEIGHBORS_HEADER.len(), 22);
     assert_eq!(export::REQUESTS_HEADER.len(), 15);
     assert_eq!(export::NEIGHBORS_HEADER[0], "client_id");
     assert_eq!(export::REQUESTS_HEADER[1], "client_id", "the join key");
@@ -116,6 +184,37 @@ fn the_column_allowlist_is_pinned() {
             }
         }
     }
+}
+
+/// Dates of birth are read but never emitted: the age column is derived, and
+/// the birth date itself is not a public field at all. See DECISIONS.md D21.
+#[test]
+fn a_birth_date_becomes_an_age_and_never_a_column() {
+    let today = list::parse_date("09/06/2026").unwrap();
+    let n: NeighborSummary = serde_json::from_value(serde_json::json!({
+        "id": 1, "firstName": "Ada", "lastName": "Nakamura", "birthDate": "09/07/1980",
+    }))
+    .unwrap();
+    assert_eq!(n.age_on(today), Some(45), "birthday is tomorrow, so still 45");
+
+    let n2: NeighborSummary = serde_json::from_value(serde_json::json!({
+        "id": 2, "firstName": "Ada", "lastName": "Nakamura", "birthDate": "09/06/1980",
+    }))
+    .unwrap();
+    assert_eq!(n2.age_on(today), Some(46), "birthday is today");
+
+    let n3: NeighborSummary = serde_json::from_value(serde_json::json!({
+        "id": 3, "firstName": "Ada", "lastName": "Nakamura",
+    }))
+    .unwrap();
+    assert_eq!(n3.age_on(today), None, "no birth date, no age");
+
+    let table = export::neighbors_table(&[n, n2, n3], today);
+    assert!(!export::NEIGHBORS_HEADER.contains(&"birth_date"));
+    let rendered = format!("{:?}", table.rows);
+    assert!(!rendered.contains("1980"), "a birth year reached the CSV");
+    assert_eq!(table.rows[0].last().unwrap(), "45");
+    assert_eq!(table.rows[2].last().unwrap(), "", "unknown age is blank, not 0");
 }
 
 #[test]
@@ -217,7 +316,7 @@ fn exports_are_readable_only_by_their_owner() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     let dir = ExportDir::at(tmp.path());
-    let table = export::neighbors_table(&[]);
+    let table = export::neighbors_table(&[], list::parse_date("09/06/2026").unwrap());
     let path = dir.write(&table, list::parse_date("09/06/2026").unwrap()).unwrap();
     let mode = std::fs::metadata(&path).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
@@ -229,7 +328,7 @@ fn read_export_only_ever_reads_its_own_files() {
     std::fs::write(tmp.path().join("secrets.csv"), "nope").unwrap();
     let dir = ExportDir::at(tmp.path());
     let day = list::parse_date("09/06/2026").unwrap();
-    dir.write(&export::neighbors_table(&[]), day).unwrap();
+    dir.write(&export::neighbors_table(&[], list::parse_date("09/06/2026").unwrap()), day).unwrap();
 
     assert!(dir.read("svdp-neighbors-2026-09-06.csv", 1 << 20).is_ok());
 
@@ -248,12 +347,37 @@ fn read_export_only_ever_reads_its_own_files() {
     assert!(dir.read("svdp-neighbors-2026-09-06.csv", 1).is_err());
 }
 
+/// A refusal that says "narrow the date range" must reach the volunteer saying
+/// that, not "something went wrong" -- nothing is broken and there is a clear
+/// next step. This was reported as a system fault until `TooBroad` existed.
+#[test]
+fn asking_for_too_much_gives_guidance_not_a_fault() {
+    let e = svdp::servware::error::ServWareError::TooBroad(
+        "That date range covers 300 households, which is more than this will look up \
+         in one go (200)."
+            .to_string(),
+    );
+    let msg = e.user_message();
+    assert!(msg.contains("300 households"), "the count must survive: {msg}");
+    assert!(msg.contains("more than this will look up"));
+    assert!(
+        !msg.contains("did not understand"),
+        "must not be flattened into a generic ServWare failure"
+    );
+
+    let generic = svdp::servware::error::ServWareError::Malformed("serde error at line 4".into());
+    assert!(
+        !generic.user_message().contains("serde"),
+        "genuine faults still hide their detail"
+    );
+}
+
 #[test]
 fn listing_shows_only_exports() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("holiday-photo.jpg"), "x").unwrap();
     let dir = ExportDir::at(tmp.path());
-    dir.write(&export::neighbors_table(&[]), list::parse_date("09/06/2026").unwrap())
+    dir.write(&export::neighbors_table(&[], list::parse_date("09/06/2026").unwrap()), list::parse_date("09/06/2026").unwrap())
         .unwrap();
     let listing = dir.list();
     assert_eq!(listing.len(), 1);

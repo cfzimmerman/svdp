@@ -290,12 +290,16 @@ impl Svdp {
             Ok(r) => r,
             Err(e) => return Ok(fail(&e)),
         };
-        Ok(save(&export::neighbors_table(&rows), None))
+        Ok(save(&export::neighbors_table(&rows, chrono::Local::now().date_naive()), None))
     }
 
-    /// Saves assistance requests in a date range to a spreadsheet on the Desktop:
-    /// who asked, when, household size, and how much was given. Join it to the
+    /// Saves assistance requests in a date range to two spreadsheets on the
+    /// Desktop: one per request, and one per item of help given. Join them to the
     /// neighbours file on client_id. Cheap.
+    ///
+    /// The date range filters on when a family ASKED. For what a family actually
+    /// RECEIVED in a period, total monetary_value in the assistance file by
+    /// date_provided — a request can carry items given weeks apart.
     #[tool(name = "export_requests", annotations(read_only_hint = true))]
     async fn export_requests(
         &self,
@@ -305,18 +309,29 @@ impl Svdp {
             Ok(w) => w,
             Err(msg) => return Ok(complain(msg)),
         };
-        let budget = if from.is_some() { 12 } else { 20 };
+        let budget = list::WINDOW_MAX_PAGES;
         let rows =
             match list::fetch_window(&self.client, StatusFilter::Any, from, to, budget).await {
                 Ok(r) => r,
                 Err(e) => return Ok(fail(&e)),
             };
-        Ok(save(&export::requests_table(&rows), None))
+        // Two grains from one pull: a request may carry several items given on
+        // different days, and "what did they receive, and when" needs the finer
+        // one. The date range filters on when families asked; `date_provided`
+        // in the assistance file says when help arrived.
+        Ok(save_all(
+            &[export::requests_table(&rows), export::assistance_table(&rows)],
+            None,
+        ))
     }
 
     /// Saves everyone living in each household — first name, relationship and
     /// AGE — to a spreadsheet on the Desktop. This is the only way to find out
     /// how old a family's children are. Join it to the other files on client_id.
+    ///
+    /// Rows exclude the neighbour themselves, so household size is rows plus one.
+    /// Households recorded only as a head count produce no rows at all and must
+    /// be reported separately rather than dropped. Never cap a household's size.
     ///
     /// SLOW: it opens one page per household, so tell the volunteer it will take
     /// a minute and always give a date range.
@@ -343,16 +358,24 @@ impl Svdp {
                 members: &h.members,
             })
             .collect();
-        let note = format!(
-            "Looked up {} households in {} visits to ServWare{}.",
-            stats.households,
-            stats.servware_requests,
-            if stats.without_members > 0 {
-                format!("; {} had nobody listed", stats.without_members)
-            } else {
-                String::new()
-            }
+        let mut note = format!(
+            "Looked up {} households in {} visits to ServWare.",
+            stats.households, stats.servware_requests
         );
+        note.push_str(
+            "\nThese rows list everyone in each house EXCEPT the neighbour themselves, \
+             so a household's size is its number of rows plus one.",
+        );
+        if stats.without_members > 0 {
+            note.push_str(&format!(
+                "\nIMPORTANT: {} of those households have nobody listed. ServWare holds \
+                 only a head count for them, so their members' ages do not exist and no \
+                 age filter can answer for them. Report them to the volunteer as a \
+                 separate named list -- checking those by hand is exactly the work this \
+                 is meant to save, so it must be said out loud, not left out.",
+                stats.without_members
+            ));
+        }
         Ok(save(&export::members_table(&rosters), Some(note)))
     }
 
@@ -708,28 +731,35 @@ fn window(
 /// Write a table to the Desktop and describe it, without putting any of its rows
 /// into the conversation. Rows arrive only when someone calls `read_export`.
 fn save(table: &export::Table, note: Option<String>) -> CallToolResult {
+    save_all(std::slice::from_ref(table), note)
+}
+
+fn save_all(tables: &[export::Table], note: Option<String>) -> CallToolResult {
     let dir = match ExportDir::desktop() {
         Ok(d) => d,
         Err(e) => return complain(e.to_string()),
     };
-    let path = match dir.write(table, chrono::Local::now().date_naive()) {
-        Ok(p) => p,
-        Err(e) => return complain(e.to_string()),
-    };
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let today = chrono::Local::now().date_naive();
     let mut lines = Vec::new();
     if let Some(note) = note {
         lines.push(note);
     }
-    lines.push(format!(
-        "Saved {} rows to {} on the Desktop.",
-        table.len(),
-        name
-    ));
-    lines.push(format!("Columns: {}.", table.header.join(", ")));
+    for table in tables {
+        let path = match dir.write(table, today) {
+            Ok(p) => p,
+            Err(e) => return complain(e.to_string()),
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        lines.push(format!(
+            "Saved {} rows to {} on the Desktop.",
+            table.len(),
+            name
+        ));
+        lines.push(format!("  Columns: {}.", table.header.join(", ")));
+    }
     lines.push(
         "It holds real family information, so keep it on this computer. \
          To work with it here, ask to read it back."
@@ -804,9 +834,26 @@ impl ServerHandler for Svdp {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_prompts().build());
         info.instructions = Some(
-            "Tools for recording St. Vincent de Paul food and gift card deliveries in \
-             ServWare. Run servware_health first. Speak plainly: the people using this \
-             are volunteers, often elderly, not computer users."
+            "Tools for St. Vincent de Paul volunteers working in ServWare: recording \
+             food and gift card deliveries, and pulling neighbour information into \
+             spreadsheets for projects such as the Christmas Adopt-a-Family program. \
+             Run servware_health first. Speak plainly: the people using this are \
+             volunteers, often elderly, not computer users.\n\n\
+             Facts about this data that change whether an answer is correct:\n\
+             - The household members file lists everyone in a house EXCEPT the neighbour \
+             themselves. A household's size is its number of rows PLUS ONE.\n\
+             - Some households have no members recorded at all: ServWare accepts either a \
+             head count or the individual people, not both. Those families produce no rows \
+             and their ages do not exist in the system. Report them as a separate named \
+             list; never let them drop out of an answer.\n\
+             - A blank age means unknown, never zero. Never cap how many people or children \
+             a household may have.\n\
+             - `date_requested` is when a family asked; `date_provided` is when help \
+             reached them. Totals of what a family received must use `date_provided`.\n\
+             - Never suggest a dollar amount for a project. The delivery amounts are a \
+             weekly-delivery policy and do not carry over; that scale is the volunteer's \
+             decision. Money in these files is what was already given.\n\
+             - Use code to do arithmetic over these files rather than counting by eye."
                 .into(),
         );
         info

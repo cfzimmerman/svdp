@@ -50,6 +50,7 @@ pub const NEIGHBORS_HEADER: &[&str] = &[
     "last_request_date",
     "household_adult_count",
     "household_child_count",
+    "age",
 ];
 
 pub const REQUESTS_HEADER: &[&str] = &[
@@ -68,6 +69,19 @@ pub const REQUESTS_HEADER: &[&str] = &[
     "calculated_household_count",
     "assistance_item_count",
     "assistance_total_dollars",
+];
+
+pub const ASSISTANCE_HEADER: &[&str] = &[
+    "request_id",
+    "client_id",
+    "first_name",
+    "last_name",
+    "date_requested",
+    "date_provided",
+    "assistance_type",
+    "monetary_value",
+    "quantity",
+    "pending",
 ];
 
 pub const MEMBERS_HEADER: &[&str] = &[
@@ -109,11 +123,23 @@ fn yes_no(b: bool) -> String {
     if b { "yes" } else { "no" }.to_string()
 }
 
+/// Whole numbers print without a decimal tail; a spreadsheet column of "1.00"
+/// where the value is always 1 reads as noise.
+fn tidy_number(n: f64) -> String {
+    if n.fract() == 0.0 {
+        format!("{}", n as i64)
+    } else {
+        format!("{n}")
+    }
+}
+
 fn opt_count(n: Option<u32>) -> String {
     n.map(|v| v.to_string()).unwrap_or_default()
 }
 
-pub fn neighbors_table(rows: &[NeighborSummary]) -> Table {
+/// `today` is injected rather than read from the clock so the derived age column
+/// is deterministic in tests.
+pub fn neighbors_table(rows: &[NeighborSummary], today: chrono::NaiveDate) -> Table {
     Table {
         name: "neighbors",
         header: NEIGHBORS_HEADER,
@@ -142,6 +168,7 @@ pub fn neighbors_table(rows: &[NeighborSummary]) -> Table {
                     n.last_request_date.clone(),
                     opt_count(n.household_adult_count),
                     opt_count(n.household_child_count),
+                    opt_count(n.age_on(today)),
                 ]
             })
             .collect(),
@@ -172,6 +199,37 @@ pub fn requests_table(rows: &[RequestSummary]) -> Table {
                     r.assistance_items.len().to_string(),
                     format!("{:.2}", r.assistance_total()),
                 ]
+            })
+            .collect(),
+    }
+}
+
+/// One row per assistance item.
+///
+/// The finest grain available, and the one that answers "what did this family
+/// actually receive, and when". Kept separate from the requests table because a
+/// request may carry several items given on different days.
+pub fn assistance_table(rows: &[RequestSummary]) -> Table {
+    Table {
+        name: "assistance",
+        header: ASSISTANCE_HEADER,
+        rows: rows
+            .iter()
+            .flat_map(|r| {
+                r.assistance_items.iter().map(move |i| {
+                    vec![
+                        r.id.to_string(),
+                        r.client.id.to_string(),
+                        r.client.first_name.clone(),
+                        r.client.last_name.clone(),
+                        r.date_requested.clone(),
+                        i.date_provided.clone(),
+                        i.type_name().to_string(),
+                        format!("{:.2}", i.monetary_value),
+                        tidy_number(i.quantity),
+                        yes_no(i.pending),
+                    ]
+                })
             })
             .collect(),
     }

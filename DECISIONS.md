@@ -482,3 +482,103 @@ fetches are sequential with a 150 ms gap and never concurrent; the default ceili
 households with a hard maximum of 400; going over **refuses and names the count** rather than
 truncating, because half a list is how a family gets left off a Christmas program; and every
 export result states how many requests it made.
+
+## D23. Validated against a volunteer's hand-built spreadsheet
+
+*September 2026*
+
+The Adopt-a-Family organiser's 2025 workbook (ServWare's Neighbor Assistance Summary Report for
+07/01–09/30/2025, plus her hand-typed child ages) was used as a reference to check whether this
+tooling captures a superset of what she had. It does, and the exercise turned up four things.
+
+**Ages reconcile at 97%.** Of 182 child-age cells she typed by hand across 79 households that
+overlap a current pull, 176 match an age this tool read, 153 of them at exactly +1 year — which
+is what thirteen months of elapsed birthdays looks like. Head-of-household ages reconcile at
+99% (142 of 151 at +1, 8 at +0). The extraction reproduces her manual work.
+
+**Her method structurally truncates.** The spreadsheet has columns `C1`–`C4`, so a household is
+capped at four children; the largest household in a current pull has eight. Nine of the
+overlapping households have more under-18s than she had room to record.
+
+**The report keys on `dateProvided`, not `dateRequested` — and this export now carries both.**
+Reconciling "Total Assistance" against requests filtered by *request* date agreed for 88 of 153
+households and overshot in 15. Filtering by *assistance* date agreed for 101 and overshot in
+**zero**. "When a family asked" and "when help reached them" are different questions and a
+request may carry items given on different days, so a fourth table was added — `assistance`, one
+row per item, with `date_provided`, `assistance_type`, `monetary_value` and `pending`. Without
+it no export could answer the question her report answers.
+
+**The residual difference is staleness in her copy, not missing data here.** For the 52
+households where her totals are lower, the shortfall is always $120, $130, $140, $150, $160 or
+$170 — exactly `$70 food + one gift card from the $50–$100 ladder`, i.e. precisely one delivery
+each. Her export was taken before those deliveries were entered. Nothing in her file exceeds what
+this tool finds, on any column. This is an argument for pulling fresh at the moment of use rather
+than working from a months-old export.
+
+**Two corrections landed as a result:**
+
+* **Reaching an old window used to fail.** `fetch_window` walks newest-first, so a window a year
+  back sat behind ~1,200 newer requests and the page budget gave up having kept nothing — and
+  "pull everything" would have failed too, against 4,907 total requests. `seek_window_start` now
+  binary-searches the offset where the window begins using single-row probes (13 tiny requests
+  instead of a dozen discarded hundred-record pages), and the budget is one shared constant sized
+  past the full history.
+* **The head of household had no age anywhere.** The members table excludes the neighbour (D19),
+  so their age was the one thing her report had that this did not. `birth_date` is now read but
+  kept private, and a derived `age` column is emitted — which is exactly the shape D21 asks for.
+
+**Known gaps, deliberately left open.** Her report also carries `Ethnicity` and `Gender`. Both
+are available in the roster response and neither is currently exported; adding them is a one-line
+edit to `NEIGHBORS_HEADER` plus its pinned test, and it is a judgement call about what belongs in
+a spreadsheet that gets emailed between volunteers rather than a technical limitation.
+
+## D24. Exports carry recorded money only, and never inherit a human layout's limits
+
+*September 2026*
+
+Two corrections to the export design, both raised after the reference-file comparison (D23).
+
+**No export may carry a policy-derived amount.** The gift-card ladder and the $70 food figure are
+a *weekly delivery* policy. What a Christmas program spends per family is a separate decision
+belonging to the volunteers running it, and one that changes year to year. Encoding a suggested
+amount in raw CSV data would quietly present a delivery figure as a Christmas recommendation.
+
+So the only money in an export is money ServWare says was **actually given** — `monetary_value`
+per item and `assistance_total_dollars` per request, both historical fact. `domain::export` and
+`domain::pull` do not import `domain::policy` at all, and a test asserts both that no export
+column name looks policy-derived and that neither module's source mentions conference policy.
+That source-level canary was verified to fail when a policy import is injected; the mistake it
+guards against is a later change wiring the ladder into a project export.
+
+**Extraction must not saturate where a human layout did.** The reference spreadsheet has columns
+`C1`–`C4`, capping a household at four children, and larger families silently lost some. Real
+data has households of ten, three with more than four children — one with eight.
+
+Nothing in the parse or the CSV imposes a limit: one row per person, no cap. A fixture with a
+ten-member household pins this. Real data gives independent evidence there is no cap upstream
+either — `calculatedHouseholdCount` equalled the member row count plus one for **all 139**
+households including the largest, and a truncating table would break that identity exactly at the
+cap. The skill states the rule in words as well, because the model is the other place a family
+could get trimmed.
+
+## D25. The bundle carries its own correctness guidance
+
+*September 2026*
+
+The `.mcpb` ships tools and prompts; **skills are not part of it** and are installed separately.
+So a volunteer who installs only the extension gets no skill, and every fact that decides whether
+an answer is right was written down only in `skills/pulling-svdp-data/SKILL.md`. Without it a
+model would compute household size off by one and silently drop the households ServWare holds
+only a head count for — the exact failure the skill exists to prevent.
+
+Those facts now live in three places that travel with the binary: the server's `instructions`
+(sent on every initialize), the tool descriptions, and — for the two that matter most — the
+**result text of `export_household_members` itself**, which is where the mistake would be made.
+The skill keeps the conversational guidance; the bundle keeps the invariants.
+
+**Related fix: `ServWareError::TooBroad`.** Asking for more households than the ceiling allows was
+raised as `Malformed`, whose `user_message` is "ServWare sent back something this tool did not
+understand. Nothing was written." A legitimate request with a clear next step was being reported
+as a system fault, and the guidance was discarded. `TooBroad` passes its message through verbatim;
+genuine faults still hide their detail. Caught by exercising the tools over stdio rather than
+through the CLI, which is an argument for testing the surface volunteers actually use.
