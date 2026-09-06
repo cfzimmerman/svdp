@@ -16,7 +16,11 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::model::ContentBlock;
 use rmcp::model::ServerCapabilities;
+use rmcp::model::PromptMessage;
 use rmcp::model::ServerInfo;
+use rmcp::prompt;
+use rmcp::prompt_handler;
+use rmcp::prompt_router;
 use rmcp::tool;
 use rmcp::tool_handler;
 use rmcp::tool_router;
@@ -558,10 +562,44 @@ fn fail(e: &ServWareError) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(e.user_message())])
 }
 
+/// Starting points a client can offer the user directly, without them having to
+/// phrase a request. Where the client surfaces these (a slash command, a menu),
+/// this is the shortest path from "I did deliveries" to the workflow running.
+#[prompt_router]
+impl Svdp {
+    /// Record today's SVdP deliveries in ServWare
+    #[prompt(name = "record_deliveries")]
+    async fn record_deliveries_prompt(&self) -> Result<Vec<PromptMessage>, ErrorData> {
+        Ok(vec![PromptMessage::new_text(
+            rmcp::model::Role::User,
+            "I did SVdP deliveries today and need to record them in ServWare.              Please start by checking that ServWare is reachable, then show me              the families who are waiting so I can say which ones we delivered to.",
+        )])
+    }
+
+    /// Show the SVdP families still waiting for a delivery
+    #[prompt(name = "who_is_waiting")]
+    async fn who_is_waiting_prompt(&self) -> Result<Vec<PromptMessage>, ErrorData> {
+        Ok(vec![PromptMessage::new_text(
+            rmcp::model::Role::User,
+            "Show me the SVdP families with open requests, longest waiting first,              with the gift card amount each household size calls for.",
+        )])
+    }
+
+    /// Check on a delivery that was not finished being saved
+    #[prompt(name = "finish_saving")]
+    async fn finish_saving_prompt(&self) -> Result<Vec<PromptMessage>, ErrorData> {
+        Ok(vec![PromptMessage::new_text(
+            rmcp::model::Role::User,
+            "Check whether there is an SVdP delivery that was not finished being              saved to ServWare, and if so, tell me what is left and offer to finish it.",
+        )])
+    }
+}
+
 #[tool_handler]
+#[prompt_handler]
 impl ServerHandler for Svdp {
     fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_prompts().build());
         info.instructions = Some(
             "Tools for recording St. Vincent de Paul food and gift card deliveries in \
              ServWare. Run servware_health first. Speak plainly: the people using this \

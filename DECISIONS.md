@@ -334,3 +334,35 @@ at the county took the request at intake; the delivery volunteer belongs in
 It is now claimed only when empty. On the first live write it happened to be empty so nothing was
 lost, but on a county-assigned request the old behaviour would have destroyed their record — and
 unlike the assistance items, nobody would have noticed.
+
+## D18. How a volunteer starts the workflow each week
+
+*September 2026*
+
+Three entry points, in order of how little the volunteer has to do.
+
+**A desktop shortcut, via a deep link.** `claude://claude.ai/new?q=<url-encoded prompt>` is a
+documented scheme that opens Claude Desktop into a new chat with the prompt already filled in
+(limit ~14,000 characters). `scripts/make-shortcut.sh` writes a `.webloc` on macOS or a
+`.desktop` on Linux. The volunteer double-clicks an icon and presses Enter — no typing, nothing
+to remember, no menu to find. This is what the setup guide should lead with.
+
+**The `/` menu.** Typing `/` in the chat box lists available skills to pick from. Fine as a
+fallback, but it means typing and scanning a list.
+
+**Natural phrasing.** Skills are model-invoked by matching the `description` against what the
+user says. The description was rewritten to the documented best practice: third person, concrete
+keywords, and an explicit "use when" clause naming phrases a volunteer actually uses
+("made deliveries", "delivered to families", "mark requests complete"). Reliable, but least
+predictable for someone who phrases things unexpectedly.
+
+**Rejected:** Projects (documented as a Cowork feature, with no documented way to attach a skill
+or extension, and Cowork is ruled out by D1); saved or pinned prompt templates (no such feature
+is documented for the consumer Chat surface).
+
+**MCP prompts are implemented but not relied upon.** The server advertises three
+(`record_deliveries`, `who_is_waiting`, `finish_saving`) and they list and resolve correctly.
+Whether Claude Desktop surfaces MCP prompts in its UI is **not documented** — the capability is
+described for the Agent SDK, not the consumer Chat client. They cost little, and if the client
+does surface them they are the shortest path of all; until that is confirmed, the desktop
+shortcut is what the guide should say.

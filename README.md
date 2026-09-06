@@ -40,11 +40,25 @@ They are stored securely on your own computer and are never part of the conversa
 **A newly installed extension starts switched off.** Make sure the toggle is on, or nothing will
 happen.
 
-### 4. Use it
+### 4. Put the shortcut on your desktop (optional, but easiest)
 
-In the Chat tab, say what you did:
+On the computer you will use, run this once:
 
-> I did deliveries today and need to record them.
+```bash
+./scripts/make-shortcut.sh
+```
+
+That puts an icon called **Record SVdP Deliveries** on the desktop. Double-clicking it opens
+Claude with the request already written — just press Enter. No typing, nothing to remember.
+
+### 5. Use it
+
+Any of these work:
+
+- **Double-click the desktop shortcut**, then press Enter. Easiest.
+- **Type `/`** in the chat box and pick the skill from the list.
+- **Just say what you did**, in your own words:
+  > I did deliveries today and need to record them.
 
 Claude will show the families waiting, ask which ones you delivered to, check the gift card
 amounts with you, ask who drove, show you everything before saving, and then record it.

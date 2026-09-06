@@ -1,6 +1,6 @@
 ---
 name: recording-svdp-deliveries
-description: Records St. Vincent de Paul food and gift card deliveries in ServWare. Use after a delivery day to mark requests complete and log dollar values by volunteer group.
+description: Records St. Vincent de Paul food and grocery gift card deliveries in ServWare. Use when someone says they made deliveries, delivered to families, or needs to mark requests complete or log assistance.
 metadata:
   conference: Nativity Catholic Church, Menlo Park
 ---

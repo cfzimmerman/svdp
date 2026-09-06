@@ -31,7 +31,7 @@ jobs:
             suffix: -linux-x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -67,7 +67,9 @@ jobs:
           print('manifest ok:', m['name'], m['version'], m['compatibility']['platforms'])
           "
 
-      - uses: actions/upload-artifact@v4
+      # upload and download are on different majors because that is what each
+      # ships as current; they share the same v4+ artifact backend.
+      - uses: actions/upload-artifact@v7
         with:
           name: svdp-servware${{ matrix.suffix }}
           path: dist/*.mcpb
@@ -77,10 +79,10 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: dist, merge-multiple: true }
       - run: ls -lh dist
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*.mcpb
           body: |
