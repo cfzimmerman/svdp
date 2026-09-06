@@ -1,4 +1,5 @@
 /target
+/dist
 
 # ---------------------------------------------------------------------------
 # PII: nothing derived from real ServWare data may ever be committed.

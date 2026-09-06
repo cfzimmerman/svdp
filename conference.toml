@@ -1,0 +1,21 @@
+# Conference policy for SVdP at Nativity Catholic Church, Menlo Park.
+#
+# Embedded into the binary with include_str!, so a build always has valid
+# defaults. An external conference.toml (working directory, or the path in
+# SVDP_CONFERENCE_CONFIG) overrides it -- useful for another conference, whose
+# assistance type IDs will differ.
+
+gift_card_ladder = [50, 60, 70, 80, 90, 100]  # by household size; first = floor, last = ceiling
+visit_mileage = "5"
+visit_notes_html = "<p>Delivered food and gift cards</p>"
+tag_assistance_notes = true
+
+[second_harvest]
+id = "16542"
+name_contains = "Second Harvest"
+value = 70
+
+[gift_card]
+id = "16522"
+name_contains = "Gift Card"
+# no fixed value: scales with household size

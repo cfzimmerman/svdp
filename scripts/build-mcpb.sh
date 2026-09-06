@@ -5,18 +5,33 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${1:-$ROOT/dist}"
-TOOLCHAIN="${SVDP_TOOLCHAIN:-}"   # e.g. SVDP_TOOLCHAIN=1.90.0
+TOOLCHAIN="${SVDP_TOOLCHAIN:-}"        # e.g. SVDP_TOOLCHAIN=1.90.0
+TARGET="${SVDP_TARGET:-}"              # e.g. x86_64-apple-darwin
+# One bundle per platform: a .mcpb carries a platform-specific binary, so the
+# manifest must declare the platform it is actually for.
+PLATFORM="${SVDP_PLATFORM:-}"          # darwin | linux | win32
+SUFFIX="${SVDP_SUFFIX:-}"              # appended to the bundle filename
 
 cd "$ROOT"
-echo "==> building release binary"
-cargo ${TOOLCHAIN:+"+$TOOLCHAIN"} build --release --bin mcp
+echo "==> building release binary${TARGET:+ for $TARGET}"
+cargo ${TOOLCHAIN:+"+$TOOLCHAIN"} build --release --bin mcp ${TARGET:+--target "$TARGET"}
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/bin"
-cp target/release/mcp "$STAGE/bin/svdp-mcp"
+BIN="target/${TARGET:+$TARGET/}release/mcp"
+cp "$BIN" "$STAGE/bin/svdp-mcp"
 chmod +x "$STAGE/bin/svdp-mcp"
 cp mcpb/manifest.json "$STAGE/manifest.json"
+if [ -n "$PLATFORM" ]; then
+  python3 - "$STAGE/manifest.json" "$PLATFORM" <<'PYEOF'
+import json, sys
+path, platform = sys.argv[1], sys.argv[2]
+m = json.load(open(path))
+m.setdefault("compatibility", {})["platforms"] = [platform]
+json.dump(m, open(path, "w"), indent=2)
+PYEOF
+fi
 
 echo "==> validating manifest"
 python3 - "$STAGE/manifest.json" <<'PY'
@@ -34,7 +49,7 @@ print(f"    manifest ok: {m['name']} v{m['version']}, {len(m.get('user_config', 
 PY
 
 mkdir -p "$OUT_DIR"
-BUNDLE="$OUT_DIR/svdp-servware.mcpb"
+BUNDLE="$OUT_DIR/svdp-servware${SUFFIX}.mcpb"
 rm -f "$BUNDLE"
 ( cd "$STAGE" && zip -qr "$BUNDLE" . )
 

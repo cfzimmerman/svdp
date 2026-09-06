@@ -138,3 +138,39 @@ fn overlay_can_uncheck_a_checked_box() {
     let after = before.overlay([("homeVisitRequired", "false".to_string())]).unwrap();
     assert_eq!(after.get("homeVisitRequired"), None, "unchecked means not submitted");
 }
+
+/// The county's intake assignment must survive a completion.
+///
+/// `requestAssignedToMemberId` records who at the county took the request. The
+/// delivery volunteer belongs in the *visit* assignment. Overwriting the intake
+/// field destroys the county's record, so it is claimed only when empty.
+#[test]
+fn intake_assignment_is_claimed_only_when_empty() {
+    let unassigned = open_form();
+    assert_eq!(unassigned.get("requestAssignedToMemberId"), Some(""));
+
+    let assigned = Form::extract(
+        include_str!("fixtures/detail_open_assigned.html"),
+        "form#editForm",
+    )
+    .unwrap();
+    assert_eq!(
+        assigned.get("requestAssignedToMemberId"),
+        Some("44271"),
+        "fixture must model a request the county already assigned"
+    );
+
+    // Completion overlays the visit assignment but leaves intake untouched.
+    let after = assigned
+        .overlay([
+            ("status", "Completed".to_string()),
+            ("visitAssignedToMemberId", "44270".to_string()),
+        ])
+        .unwrap();
+    assert_eq!(
+        after.get("requestAssignedToMemberId"),
+        Some("44271"),
+        "the county's intake assignment must be preserved"
+    );
+    assert_eq!(after.get("visitAssignedToMemberId"), Some("44270"));
+}

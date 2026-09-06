@@ -201,11 +201,10 @@ fn collect_controls(form: ElementRef<'_>) -> Vec<Control> {
                     .collect();
                 // With nothing marked selected, a single-select browser submits
                 // the first option; a multi-select submits nothing.
-                if selected.is_empty() && v.attr("multiple").is_none() {
-                    if let Some(first) = el.select(&option).next() {
+                if selected.is_empty() && v.attr("multiple").is_none()
+                    && let Some(first) = el.select(&option).next() {
                         selected.push(option_value(first));
                     }
-                }
                 for value in selected {
                     out.push(Control {
                         name: name.to_string(),

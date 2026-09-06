@@ -283,3 +283,54 @@ consequences, both structural:
 
 The CLI gained an explicit `--client-id` override, since a maintainer re-running against an
 already-closed request has no other way to supply it.
+
+## D15. One bundle per platform, built in CI
+
+*September 2026*
+
+A `.mcpb` carries a compiled binary, so it is a platform-specific artifact — one bundle per
+target, not a universal one. Targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+`x86_64-unknown-linux-gnu`.
+
+Built by GitHub Actions rather than by hand. Hand-building meant the artifact depended on the
+maintainer's laptop being awake and on whatever was in his working tree — during development a
+stale bundle was once deployed over a failed build without anyone noticing. CI also gates the
+things that are easy to lose: `cargo test`, `clippy -D warnings`, and a check that no CSV or HAR
+is tracked and no fixture carries a phone number outside the reserved `555-01xx` range.
+
+The Intel Mac target matters more than it looks. The first bundle shipped was arm64-only; on an
+Intel Mac the server would simply fail to start, and the failure surface inside Claude Desktop is
+an unexplained "server failed to start". Volunteers on older Macs are exactly the audience here.
+
+No signing step, per D8.
+
+## D16. The conference policy is compiled in
+
+*September 2026*
+
+`conference.toml` is embedded with `include_str!` and parsed into the default config.
+
+An MCP server is spawned by Claude Desktop with an undefined working directory, so the previous
+"read `conference.toml` from the current directory" silently found nothing and fell back to
+hard-coded values. The config was effectively inert — worse than not having one, because it
+looked configurable.
+
+Embedding means a shipped binary always has a valid, reviewed policy, and a malformed edit fails
+at build time rather than at a volunteer's keyboard. A test asserts the embedded file parses and
+still matches conference practice, since it now decides real money.
+
+An external file still overrides it — `SVDP_CONFERENCE_CONFIG`, else `conference.toml` in the
+working directory — which is what another conference would use. A malformed override is ignored
+with a warning rather than half-applied.
+
+## D17. The completion write preserves the county's intake assignment
+
+*September 2026*
+
+`mark_complete` used to set `requestAssignedToMemberId` unconditionally. That field records who
+at the county took the request at intake; the delivery volunteer belongs in
+`visitAssignedToMemberId`.
+
+It is now claimed only when empty. On the first live write it happened to be empty so nothing was
+lost, but on a county-assigned request the old behaviour would have destroyed their record — and
+unlike the assistance items, nobody would have noticed.

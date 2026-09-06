@@ -87,6 +87,8 @@ ITEM = ('<tr><td>&nbsp;</td><td>{name}</td><td>${value}</td><td>{date}</td><td>{
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "detail_open.html").write_text(detail_page())
+    # An open request the county has already assigned to someone at intake.
+    (OUT / "detail_open_assigned.html").write_text(detail_page(assigned="44271"))
     (OUT / "detail_completed.html").write_text(detail_page(
         status="Completed", visit_completed=True, assigned="44270",
         items_html=(

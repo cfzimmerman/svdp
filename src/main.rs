@@ -152,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
             let filter = if all { StatusFilter::Any } else { StatusFilter::Open };
             let requests = list::fetch_all(&client, filter).await?;
             println!("{} requests", requests.len());
-            println!("{:>9}  {:<24} {:>3} {:>6}  {:<10} {}", "ID", "NAME", "HH", "CARD", "REQUESTED", "STATUS");
+            println!("{:>9}  {:<24} {:>3} {:>6}  {:<10} STATUS", "ID", "NAME", "HH", "CARD", "REQUESTED");
             for r in &requests {
                 println!(
                     "{:>9}  {:<24} {:>3} {:>5}$  {:<10} {}",

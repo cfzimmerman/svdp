@@ -32,40 +32,39 @@ pub struct AssistanceType {
     pub value: Option<u32>,
 }
 
+/// The conference config, compiled in.
+///
+/// Embedding it means a shipped binary always has a valid, reviewed policy even
+/// though an MCP server's working directory is undefined -- reading a file
+/// relative to the process would silently find nothing.
+const EMBEDDED: &str = include_str!("../../conference.toml");
+
 impl Default for ConferenceConfig {
     fn default() -> Self {
-        Self {
-            second_harvest: AssistanceType {
-                id: "16542".into(),
-                name_contains: "Second Harvest".into(),
-                value: Some(70),
-            },
-            gift_card: AssistanceType {
-                id: "16522".into(),
-                name_contains: "Gift Card".into(),
-                value: None, // scales with household size
-            },
-            gift_card_ladder: vec![50, 60, 70, 80, 90, 100],
-            visit_mileage: "5".into(),
-            visit_notes_html: "<p>Delivered food and gift cards</p>".into(),
-            tag_assistance_notes: true,
-        }
+        toml::from_str(EMBEDDED).expect("embedded conference.toml must parse; covered by a test")
     }
 }
 
 impl ConferenceConfig {
-    /// Load from `conference.toml` beside the binary or in the working
-    /// directory, falling back to the Nativity defaults.
+    /// The embedded policy, unless an external file overrides it.
+    ///
+    /// Override order: `SVDP_CONFERENCE_CONFIG`, then `conference.toml` in the
+    /// working directory. A malformed override is ignored with a warning rather
+    /// than taken as policy -- a half-parsed config could mean wrong money.
     pub fn load() -> Self {
-        for path in ["conference.toml", "../conference.toml"] {
-            if let Ok(text) = std::fs::read_to_string(path) {
-                match toml::from_str(&text) {
-                    Ok(cfg) => {
-                        tracing::info!(path, "loaded conference config");
-                        return cfg;
-                    }
-                    Err(e) => tracing::warn!(path, %e, "ignoring malformed conference config"),
+        let candidates = std::env::var("SVDP_CONFERENCE_CONFIG")
+            .into_iter()
+            .chain(["conference.toml".to_string()]);
+        for path in candidates {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            match toml::from_str::<Self>(&text) {
+                Ok(cfg) => {
+                    tracing::info!(path, "using external conference config");
+                    return cfg;
                 }
+                Err(e) => tracing::warn!(path, %e, "ignoring malformed conference config"),
             }
         }
         Self::default()

@@ -30,6 +30,7 @@ fn ladder_is_monotonic_and_bounded() {
 
 /// A short ladder must still clamp rather than panic or return zero.
 #[test]
+#[allow(clippy::field_reassign_with_default)] // start from real policy, vary one field
 fn oversized_household_clamps_to_the_last_rung() {
     let mut c = ConferenceConfig::default();
     c.gift_card_ladder = vec![25, 35];
@@ -60,8 +61,55 @@ fn item_notes_round_trip_through_tag_extraction() {
 }
 
 #[test]
+#[allow(clippy::field_reassign_with_default)] // start from real policy, vary one field
 fn tagging_can_be_disabled() {
     let mut c = ConferenceConfig::default();
     c.tag_assistance_notes = false;
     assert_eq!(c.item_notes("01JBQ", Slot::Food, "09/05/2026"), "");
+}
+
+/// The config is compiled in with `include_str!`, so a malformed edit would
+/// panic every binary at first use. Fail here instead.
+#[test]
+fn embedded_conference_config_parses_and_matches_practice() {
+    let c = ConferenceConfig::default(); // parses EMBEDDED or panics
+    assert_eq!(c.second_harvest.id, "16542");
+    assert_eq!(c.second_harvest.value, Some(70));
+    assert_eq!(c.gift_card.id, "16522");
+    assert_eq!(c.gift_card.value, None, "gift cards scale with household size");
+    assert_eq!(c.gift_card_ladder, vec![50, 60, 70, 80, 90, 100]);
+    assert!(c.tag_assistance_notes, "idempotency depends on the tag");
+}
+
+/// An external file overrides the embedded policy; a malformed one must not.
+#[test]
+fn external_config_overrides_but_malformed_is_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let good = dir.path().join("good.toml");
+    std::fs::write(&good, r#"
+gift_card_ladder = [10, 20]
+visit_mileage = "9"
+visit_notes_html = "<p>x</p>"
+tag_assistance_notes = false
+[second_harvest]
+id = "1"
+name_contains = "Food"
+value = 5
+[gift_card]
+id = "2"
+name_contains = "Card"
+"#).unwrap();
+    unsafe { std::env::set_var("SVDP_CONFERENCE_CONFIG", &good) };
+    let c = ConferenceConfig::load();
+    assert_eq!(c.second_harvest.id, "1", "external config must win");
+    assert_eq!(c.gift_card_dollars(9), 20);
+
+    let bad = dir.path().join("bad.toml");
+    std::fs::write(&bad, "this is not = valid [toml").unwrap();
+    unsafe { std::env::set_var("SVDP_CONFERENCE_CONFIG", &bad) };
+    let c = ConferenceConfig::load();
+    assert_eq!(c.second_harvest.id, "16542", "malformed override must fall back, not half-apply");
+
+    unsafe { std::env::remove_var("SVDP_CONFERENCE_CONFIG") };
 }

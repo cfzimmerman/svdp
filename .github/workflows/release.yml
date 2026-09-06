@@ -1,0 +1,95 @@
+name: release
+
+# Builds the installable extension. A .mcpb carries a platform-specific binary,
+# so each target gets its own bundle and volunteers download the one for their
+# machine.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14          # Apple Silicon
+            target: aarch64-apple-darwin
+            platform: darwin
+            suffix: -macos-arm64
+          - os: macos-13          # Intel
+            target: x86_64-apple-darwin
+            platform: darwin
+            suffix: -macos-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux
+            suffix: -linux-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - run: cargo test --all-targets
+
+      - name: build bundle
+        env:
+          SVDP_TARGET: ${{ matrix.target }}
+          SVDP_PLATFORM: ${{ matrix.platform }}
+          SVDP_SUFFIX: ${{ matrix.suffix }}
+        run: ./scripts/build-mcpb.sh
+
+      # Gatekeeper does not apply -- Claude Desktop does not propagate the
+      # quarantine attribute when it unpacks a bundle (DECISIONS.md D8) -- so no
+      # Developer ID or notarization step is needed.
+      - name: verify the bundle
+        run: |
+          set -e
+          B="dist/svdp-servware${{ matrix.suffix }}.mcpb"
+          test -f "$B"
+          unzip -l "$B" | grep -q 'bin/svdp-mcp'
+          unzip -p "$B" manifest.json | python3 -c "
+          import json,sys
+          m=json.load(sys.stdin)
+          assert m['server']['type']=='binary', m['server']
+          assert m['compatibility']['platforms']==['${{ matrix.platform }}']
+          for k,v in m['user_config'].items():
+              assert 'description' in v, f'{k} needs a description'
+          print('manifest ok:', m['name'], m['version'], m['compatibility']['platforms'])
+          "
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: svdp-servware${{ matrix.suffix }}
+          path: dist/*.mcpb
+
+  publish:
+    needs: bundle
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - run: ls -lh dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.mcpb
+          body: |
+            Download the bundle for your computer, then drag it into
+            Claude Desktop → Settings → Extensions.
+
+            - **Mac with Apple silicon** (M1 and later) — `svdp-servware-macos-arm64.mcpb`
+            - **Mac with Intel** — `svdp-servware-macos-x86_64.mcpb`
+            - **Linux** — `svdp-servware-linux-x86_64.mcpb`
+
+            After installing, open the extension's settings, enter your ServWare
+            username and password, and switch the extension **on**.

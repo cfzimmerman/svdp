@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main, claude-rewrite]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The whole suite runs without network. If something here needs ServWare,
+      # that is the bug.
+      - run: cargo test --all-targets
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build --release --bin mcp
+
+      # A leak of neighbour data would be permanent: this repo is public.
+      - name: no real data committed
+        run: |
+          set -e
+          if git ls-files | grep -iE '\.(csv|har|har2)$'; then
+            echo "::error::real-data file is tracked; see CLAUDE.md"
+            exit 1
+          fi
+          if grep -rIlE '[0-9]{3}-[0-9]{3}-[0-9]{4}' tests/fixtures 2>/dev/null \
+             | grep -v '555-01'; then
+            echo "::error::fixture contains a phone number outside the reserved 555-01xx range"
+            exit 1
+          fi
+          echo "clean"

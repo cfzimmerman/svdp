@@ -53,7 +53,7 @@ fn real_detail_page_round_trips() {
         "prisonVisitCnt", "phoneVisitCnt", "churchPantryVisitCnt",
         "referralOrganizationId", "referralConference",
     ];
-    let found = dropped.iter().filter(|f| form.contains(*f)).count();
+    let found = dropped.iter().filter(|f| form.contains(f)).count();
     println!("  previously-dropped fields now preserved: {found}/{}", dropped.len());
     assert!(found >= 6, "expected the live form to carry the visit-count fields");
 

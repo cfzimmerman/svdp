@@ -42,19 +42,22 @@ pub async fn mark_complete(
     if before.is_completed() {
         return Ok(WriteOutcome::AlreadyDone);
     }
-    if let Some(expected) = expected_version {
-        if let Some(actual) = before.form.get("version").and_then(|v| v.parse::<u64>().ok()) {
-            if actual != expected {
-                return Ok(WriteOutcome::Conflict(format!(
-                    "it was edited in ServWare after you planned this delivery"
-                )));
+    if let Some(expected) = expected_version
+        && let Some(actual) = before.form.get("version").and_then(|v| v.parse::<u64>().ok())
+            && actual != expected {
+                return Ok(WriteOutcome::Conflict("it was edited in ServWare after you planned this delivery".to_string()));
             }
-        }
-    }
 
-    let after = before.form.overlay([
+    // `requestAssignedToMemberId` is the county's *intake* assignment, not ours.
+    // Claim it only when nobody holds it; overwriting would destroy their record
+    // of who took the request. The visit assignment is ours to set either way.
+    let intake_unassigned = before
+        .form
+        .get("requestAssignedToMemberId")
+        .is_none_or(str::is_empty);
+
+    let mut changes = vec![
         ("status", "Completed".to_string()),
-        ("requestAssignedToMemberId", volunteer_id.to_string()),
         ("visitAssignedToMemberId", volunteer_id.to_string()),
         ("homeVisitRequired", "true".to_string()),
         ("homeVisitCnt", "1".to_string()),
@@ -62,7 +65,16 @@ pub async fn mark_complete(
         ("visitMileageInService", config.visit_mileage.clone()),
         ("visitScheduledDate", visit_date.to_string()),
         ("visitNotes", config.visit_notes_html.clone()),
-    ])?;
+    ];
+    if intake_unassigned {
+        changes.push(("requestAssignedToMemberId", volunteer_id.to_string()));
+    } else {
+        tracing::info!(
+            request_id,
+            "leaving the existing intake assignment alone"
+        );
+    }
+    let after = before.form.overlay(changes)?;
 
     // Prove we are changing only what we named. Clobbering becomes impossible by
     // construction rather than by care.
