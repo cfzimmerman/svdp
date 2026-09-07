@@ -2,7 +2,10 @@ name: ci
 
 on:
   push:
-    branches: [main, claude-rewrite]
+    # Not a fixed list of branch names. The previous filter was
+    # `[main, claude-rewrite]`, which never matched the real working branch
+    # `feature/claude-rewrite` — so none of the checks below had ever run.
+    branches: ['**']
   pull_request:
 
 jobs:
@@ -19,17 +22,61 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --release --bin mcp
 
+      # The release profile is what ships, and it is where the runtime money
+      # checks have to exist. This fails if a `debug_assert!` is ever used to
+      # guard a write again: they compile out of --release.
+      - name: no debug_assert guarding a write
+        run: |
+          set -e
+          # `debug_assert!(` as code -- prose about why it must not be used is
+          # welcome, and there is some.
+          if grep -rnE 'debug_assert!\(' src/; then
+            echo "::error::debug_assert! is compiled out of the shipped --release binary; use a real check"
+            exit 1
+          fi
+          echo "clean"
+
       # A leak of neighbour data would be permanent: this repo is public.
       - name: no real data committed
         run: |
           set -e
-          if git ls-files | grep -iE '\.(csv|har|har2)$'; then
+          fail=0
+
+          # Captures and exports, by extension. HTML and JSON are included
+          # because a real ServWare page or list response is exactly as
+          # sensitive as a CSV, and the previous check covered neither.
+          if git ls-files \
+             | grep -iE '\.(csv|har|har2)$'; then
             echo "::error::real-data file is tracked; see CLAUDE.md"
-            exit 1
+            fail=1
           fi
-          if grep -rIlE '[0-9]{3}-[0-9]{3}-[0-9]{4}' tests/fixtures 2>/dev/null \
-             | grep -v '555-01'; then
+          if git ls-files \
+             | grep -iE '\.(html|json)$' \
+             | grep -vE '^(tests/fixtures/|mcpb/manifest\.json$|\.claude/)'; then
+            echo "::error::HTML or JSON outside tests/fixtures is tracked; a real capture must never be committed"
+            fail=1
+          fi
+
+          # Fixtures are synthetic by construction (DECISIONS.md D12), so the
+          # strongest available check is that they are byte-reproducible from
+          # the generator. A real capture cannot survive this.
+          python3 scripts/gen-fixtures.py >/dev/null
+          if ! git diff --quiet -- tests/fixtures; then
+            echo "::error::tests/fixtures does not match scripts/gen-fixtures.py output; fixtures must be generated, never captured"
+            git diff --stat -- tests/fixtures
+            fail=1
+          fi
+
+          # Phone numbers, matched on CONTENT. The previous version piped
+          # `grep -rIlE` (which prints filenames) into `grep -v 555-01`, so it
+          # filtered filenames rather than matches and could never fire.
+          if grep -rhoIE '[0-9]{3}-[0-9]{3}-[0-9]{4}|\b[0-9]{3}-[0-9]{4}\b' tests/fixtures 2>/dev/null \
+             | grep -vE '555-01[0-9]{2}$' | grep -q .; then
             echo "::error::fixture contains a phone number outside the reserved 555-01xx range"
-            exit 1
+            grep -rhoIE '[0-9]{3}-[0-9]{3}-[0-9]{4}|\b[0-9]{3}-[0-9]{4}\b' tests/fixtures \
+              | grep -vE '555-01[0-9]{2}$' | sort -u
+            fail=1
           fi
+
+          [ "$fail" = 0 ] || exit 1
           echo "clean"

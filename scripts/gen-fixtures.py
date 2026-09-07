@@ -39,8 +39,12 @@ MEMBER_COLUMNS = ["First Name", "Last Name", "Relationship", "Age",
 SENTINEL_SSN = "9999"
 SENTINEL_DL = "SENTINELDLNEVERREAD"
 
+# The neighbour themselves is NOT a row: ServWare lists only the other people in
+# the house, verified across 139 real households (DECISIONS.md D19). A fixture
+# with a "Self" row would pin a shape the live system does not produce, so the
+# one fixture that has such a row is deliberately separate and exists only to
+# prove the exporter excludes it.
 HOUSEHOLD = [
-    ("Maria", "Okonkwo", "Self", "41"),
     ("Peter", "Okonkwo", "Son", "17"),
     ("Daniel", "Okonkwo", "Son", "12"),
     ("Ruth", "Okonkwo", "Daughter", "8"),
@@ -131,6 +135,25 @@ def detail_page(*, status="Open", visit_completed=False, assigned="", items_html
 ITEM = ('<tr><td>&nbsp;</td><td>{name}</td><td>${value}</td><td>{date}</td><td>{pending}</td>'
         '<td></td><td>No</td><td></td><td>{notes}</td><td>&nbsp;</td></tr>')
 
+# Deliberately hand-written rather than produced by `detail_page`: the point of
+# this fixture is the *structure*, and spelling it out makes the trap visible.
+NESTED_MODAL_PAGE = """<!DOCTYPE html>
+<html><head><title>Assistance Request</title></head><body>
+<form id="editForm" method="post" action="/app/assistancerequests/3724739">
+  <select name="status"><option value="Open" selected>Open</option></select>
+  <textarea name="visitNotes">&lt;p&gt;Prior visit&lt;/p&gt;</textarea>
+  <input type="checkbox" name="visitCompleted" value="true"/>
+  <div class="modal">
+    <form id="sendEmailForm" method="post" action="/app/sendemail">
+      <select name="sendToRoleId"><option value="3">Conference President</option></select>
+    </form>
+  </div>
+  <input type="hidden" name="controlAfterTheModal" value="dropped-by-the-parser"/>
+</form>
+</body></html>
+"""
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "detail_open.html").write_text(detail_page())
@@ -165,8 +188,27 @@ def main():
     ])))
     # A household with an unrecorded age, and one with nobody but the neighbour.
     (OUT / "detail_members_sparse.html").write_text(detail_page(members=members_html(
-        rows=[("Ada", "Nakamura", "Self", "63"), ("Wren", "Nakamura", "Grandchild", "")])))
+        rows=[("Ada", "Nakamura", "Grandparent", "63"),
+              ("Wren", "Nakamura", "Grandchild", "")])))
+    # The tab and its table are present but list nobody: ServWare accepts a head
+    # count OR individual people, and 19 of 158 households in one window had only
+    # the head count. This is a legitimate answer and must parse as an empty
+    # roster, NOT as a failure.
+    (OUT / "detail_members_empty.html").write_text(detail_page(members=members_html(rows=[])))
+    # No tab at all. That is ServWare's page having changed shape, which is a
+    # different thing entirely, and must be an error rather than silently
+    # reading as "this family has nobody" -- see DECISIONS.md D32.
     (OUT / "detail_members_absent.html").write_text(detail_page(members=""))
+    # Another conference might record the neighbour as a row. Household size is
+    # "rows plus one", so such a row has to be excluded or that family is counted
+    # twice and can move up a gift-card rung.
+    (OUT / "detail_members_with_self.html").write_text(detail_page(members=members_html(
+        rows=[("Maria", "Okonkwo", "Self", "41"), ("Ruth", "Okonkwo", "Daughter", "8")])))
+    # A modal nested INSIDE the edit form. html5ever drops the inner <form> start
+    # tag and the first </form> closes the outer one, so the parsed tree both
+    # gains the modal's controls and loses every real control after it. Nothing
+    # downstream can detect that, so extraction refuses outright.
+    (OUT / "detail_nested_modal.html").write_text(NESTED_MODAL_PAGE)
 
     for p in sorted(OUT.glob("*.html")):
         print(f"  {p.relative_to(OUT.parent.parent)}  {p.stat().st_size}B")

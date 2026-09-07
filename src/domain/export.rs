@@ -223,9 +223,12 @@ pub fn assistance_table(rows: &[RequestSummary]) -> Table {
                         r.client.first_name.clone(),
                         r.client.last_name.clone(),
                         r.date_requested.clone(),
-                        i.date_provided.clone(),
+                        i.date_provided.clone().unwrap_or_default(),
                         i.type_name().to_string(),
-                        format!("{:.2}", i.monetary_value),
+                        // Blank, not "0.00": an item ServWare gave no amount for
+                        // is not an item worth nothing, and a spreadsheet full
+                        // of zeroes reads as fact.
+                        i.monetary_value.map(|v| format!("{v:.2}")).unwrap_or_default(),
                         tidy_number(i.quantity),
                         yes_no(i.pending),
                     ]
@@ -315,7 +318,7 @@ impl ExportDir {
         w.write_record(table.header)
             .map_err(|e| ExportError::Io(e.to_string()))?;
         for row in &table.rows {
-            w.write_record(row)
+            w.write_record(row.iter().map(|c| defuse_formula(c)))
                 .map_err(|e| ExportError::Io(e.to_string()))?;
         }
         w.flush().map_err(|e| ExportError::Io(e.to_string()))?;
@@ -383,6 +386,30 @@ impl ExportDir {
         }
         std::fs::read_to_string(&path).map_err(|e| ExportError::Io(e.to_string()))
     }
+}
+
+/// Neutralise a cell a spreadsheet would execute rather than display.
+///
+/// These files exist to be double-clicked into Excel or Numbers, and a leading
+/// `=`, `+`, `-` or `@` makes the cell a formula there. ServWare's free-text
+/// fields are typed by caseworkers and reach these tables, so a note beginning
+/// `=` becomes live code on a volunteer's machine. Prefixing with an apostrophe
+/// is the standard defence and is invisible in the spreadsheet.
+///
+/// Numbers are left alone, so a negative amount stays a negative amount rather
+/// than becoming text that will not sum.
+fn defuse_formula(cell: &str) -> String {
+    let risky = cell.starts_with(['=', '+', '-', '@', '\t', '\r']);
+    if risky && cell.parse::<f64>().is_err() {
+        return format!("'{cell}");
+    }
+    cell.to_string()
+}
+
+/// Test-only view of [`defuse_formula`], so the rule can be asserted directly
+/// rather than inferred from a written file.
+pub fn defuse_for_test(cell: &str) -> String {
+    defuse_formula(cell)
 }
 
 /// Exports hold real neighbour information, so they are readable only by the

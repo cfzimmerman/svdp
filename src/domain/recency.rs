@@ -26,7 +26,10 @@ impl DeliveryRecency {
         let mut entries = Vec::new();
         for r in history {
             for item in &r.assistance_items {
-                if let Some(date) = crate::servware::list::parse_date(&item.date_provided) {
+                let Some(raw) = item.date_provided.as_deref() else {
+                    continue;
+                };
+                if let Some(date) = crate::servware::list::parse_date(raw) {
                     entries.push((r.client.id, r.id, date));
                 }
             }
@@ -52,6 +55,13 @@ impl DeliveryRecency {
             .max()
     }
 
+    /// Whether the history yielded no delivery dates at all.
+    ///
+    /// **Must be checked before reporting that nobody is due.** A successful
+    /// fetch whose `date_provided` fields have all gone missing produces an
+    /// empty recency, every request then looks due, and the tool tells the
+    /// person deciding tonight's route that "no family here has had a delivery
+    /// in the last 28 days" -- a confident falsehood. See DECISIONS.md D43.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

@@ -13,6 +13,23 @@ use scraper::ElementRef;
 use scraper::Html;
 use scraper::Selector;
 
+/// What an overlay is allowed to do to a control.
+///
+/// Checkboxes and radios are not interchangeable, which the previous single
+/// `toggleable: bool` hid. A checkbox overlay decides *whether* it submits; a
+/// radio overlay decides *which* member of the group submits, and the requested
+/// value is the thing that chooses. Collapsing the two made
+/// `overlay([("mode", "B")])` submit the first radio's value instead of `B`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// Text, hidden, select, textarea: the overlay replaces the value.
+    Value,
+    /// Submits only when checked; the overlay decides checked or not.
+    Checkbox,
+    /// One of a same-named group; the overlay picks by declared value.
+    Radio,
+}
+
 /// One named control in the form, in document order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Control {
@@ -21,9 +38,7 @@ struct Control {
     /// Whether the browser would submit this control as it currently stands.
     /// Unchecked checkboxes and radios are present in the DOM but not submitted.
     submits: bool,
-    /// Checkboxes and radios can be toggled by an overlay; other controls only
-    /// have their value replaced.
-    toggleable: bool,
+    kind: Kind,
 }
 
 /// A form's named controls, in document order, duplicates preserved.
@@ -51,30 +66,52 @@ pub enum FormError {
     /// parameter the server will ignore while the real field keeps its old value.
     #[error("form has no control named `{0}` (ServWare's form may have changed)")]
     UnknownField(String),
+    /// The overlay asked a radio group for a value none of its buttons declares.
+    /// Silently submitting a different option would be a wrong write.
+    #[error("radio group `{name}` has no option with value `{value}`")]
+    UnknownValue { name: String, value: String },
+    /// The page nests one form inside another.
+    ///
+    /// html5ever implements the HTML5 rule for this: the inner `<form>` start
+    /// tag is **dropped**, and the first `</form>` closes the outer form. The
+    /// parsed tree therefore claims the inner form's controls belong to the
+    /// outer one, and silently loses every outer control that follows the inner
+    /// form. Neither is recoverable after parsing, so extraction refuses rather
+    /// than submitting a form it cannot vouch for.
+    ///
+    /// Verified against the live page (September 2026): eight forms, all
+    /// siblings, so this does not fire today. It is the canary for ServWare
+    /// moving a modal inside the edit form.
+    #[error("the page nests forms ({source_forms} in the source, {parsed_forms} after parsing); \
+             extraction cannot be trusted and this tool needs an update")]
+    NestedForms { source_forms: usize, parsed_forms: usize },
 }
 
 impl Form {
-    /// Extract the submittable controls of the first element matching `selector`.
-    pub fn extract(html: &str, selector: &str) -> Result<Self, FormError> {
-        let doc = Html::parse_document(html);
-        let sel = Selector::parse(selector).map_err(|_| FormError::BadSelector(selector.into()))?;
-        let form = doc
-            .select(&sel)
-            .next()
-            .ok_or_else(|| FormError::NoMatch(selector.into()))?;
-        Ok(Self { controls: collect_controls(form) })
-    }
-
-    /// The name/value pairs a browser would submit, in document order.
     /// Extract the first form that renders every one of `required`.
     ///
-    /// Preferred over selecting by `id`: the page carries several modal forms
-    /// alongside the edit form, and identifying the real one by the controls it
-    /// contains survives ServWare renaming the element. (The live page uses
+    /// Identifying the form by the controls it contains, rather than by `id`,
+    /// survives ServWare renaming the element. (The live page uses
     /// `id="editForm"`, which is not something to depend on.)
+    ///
+    /// `required` is also the schema check, so pass the **full** set of controls
+    /// the caller intends to overlay. A form missing one of them is not this
+    /// form, and the resulting `NoMatch` is a loud failure rather than a POST
+    /// that quietly omits a field.
     pub fn extract_containing(html: &str, required: &[&str]) -> Result<Self, FormError> {
         let doc = Html::parse_document(html);
         let sel = Selector::parse("form").map_err(|_| FormError::BadSelector("form".into()))?;
+        let parsed_forms = doc.select(&sel).count();
+
+        // Nesting destroys the information this whole module depends on, and it
+        // is destroyed *by the parser*, before any of our code runs -- so the
+        // only place to catch it is by comparing against the source text. See
+        // `FormError::NestedForms`.
+        let source_forms = count_form_start_tags(html);
+        if source_forms > parsed_forms {
+            return Err(FormError::NestedForms { source_forms, parsed_forms });
+        }
+
         for element in doc.select(&sel) {
             let candidate = Self { controls: collect_controls(element) };
             if required.iter().all(|name| candidate.contains(name)) {
@@ -84,6 +121,7 @@ impl Form {
         Err(FormError::NoMatch(format!("a form containing {required:?}")))
     }
 
+    /// The name/value pairs a browser would submit, in document order.
     pub fn pairs(&self) -> Vec<(String, String)> {
         self.controls
             .iter()
@@ -111,9 +149,18 @@ impl Form {
     /// as the server rendered it.
     ///
     /// Every key must already exist in the form; an unknown key is an error
-    /// rather than an append. Setting a key that appears more than once replaces
-    /// the first occurrence and drops the rest, which is what a browser does when
-    /// a single logical control was rendered twice.
+    /// rather than an append -- the canary for ServWare renaming a field.
+    ///
+    /// What the requested value means depends on the control:
+    ///
+    /// * **Value controls** (text, hidden, select, textarea) take it verbatim.
+    ///   A name rendered more than once keeps the first occurrence and drops the
+    ///   rest, which is what a browser does with a duplicated logical control.
+    /// * **Checkboxes** read it as on or off. The submitted value stays the one
+    ///   the page declared, because that is what the browser sends.
+    /// * **Radios** are selected *by* it: the button declaring that value
+    ///   submits and its siblings do not. Asking for a value no button declares
+    ///   is an error, not a silent fallback to the first button in the group.
     pub fn overlay<'a, I>(&self, changes: I) -> Result<Self, FormError>
     where
         I: IntoIterator<Item = (&'a str, String)>,
@@ -127,48 +174,130 @@ impl Form {
 
         let mut controls = self.controls.clone();
         for (name, value) in changes {
-            let mut first = true;
-            for c in controls.iter_mut().filter(|c| c.name == name) {
-                if !first {
-                    // A logical control rendered twice submits once.
-                    c.submits = false;
-                    continue;
+            let group: Vec<usize> = controls
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.name == name)
+                .map(|(i, _)| i)
+                .collect();
+
+            match controls[group[0]].kind {
+                Kind::Radio => {
+                    let chosen = group.iter().copied().find(|&i| controls[i].value == value);
+                    let Some(chosen) = chosen else {
+                        return Err(FormError::UnknownValue { name: name.to_string(), value });
+                    };
+                    for &i in &group {
+                        controls[i].submits = i == chosen;
+                    }
                 }
-                first = false;
-                if c.toggleable {
-                    // For a checkbox, an overlay decides whether it is checked.
-                    // Anything other than an explicit falsey value checks it, and
-                    // the submitted value stays the one the page declared.
-                    c.submits = !matches!(value.as_str(), "" | "false" | "off");
-                } else {
-                    c.value = value.clone();
-                    c.submits = true;
+                Kind::Checkbox => {
+                    let on = is_truthy(&value);
+                    for (n, &i) in group.iter().enumerate() {
+                        // Only the first of a duplicated checkbox submits.
+                        controls[i].submits = on && n == 0;
+                    }
+                }
+                Kind::Value => {
+                    for (n, &i) in group.iter().enumerate() {
+                        if n == 0 {
+                            controls[i].value = value.clone();
+                            controls[i].submits = true;
+                        } else {
+                            controls[i].submits = false;
+                        }
+                    }
                 }
             }
         }
         Ok(Self { controls })
     }
 
-    /// Fields whose value differs, as `(name, before, after)`.
+    /// Fields whose submitted value differs, as `(name, before, after)`.
     ///
-    /// Used to prove an update changes only what was intended, and to show a
-    /// human exactly what a submission will do.
+    /// Compares the **full multiset of submitted pairs**, not a name-to-first-
+    /// value lookup. ServWare repeats some names, and resolving by first
+    /// occurrence both invented differences and hid real ones -- on the screen a
+    /// volunteer approves immediately before the only irreversible step. Where a
+    /// name submits more than once its values are joined for display.
     pub fn diff(&self, other: &Self) -> Vec<(String, String, String)> {
-        let mut out = Vec::new();
-        for (name, before) in self.pairs() {
-            let after = other.get(&name).unwrap_or("");
-            if after != before {
-                out.push((name, before, after.to_string()));
+        fn by_name(
+            pairs: Vec<(String, String)>,
+        ) -> std::collections::BTreeMap<String, Vec<String>> {
+            let mut out: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+            for (name, value) in pairs {
+                out.entry(name).or_default().push(value);
             }
+            out
         }
-        // Controls the overlay newly caused to submit, e.g. a checkbox turned on.
-        for (name, after) in other.pairs() {
-            if self.get(&name).is_none() {
-                out.push((name, String::new(), after));
-            }
-        }
-        out
+        let before = by_name(self.pairs());
+        let after = by_name(other.pairs());
+
+        let mut names: Vec<&String> = before.keys().chain(after.keys()).collect();
+        names.sort();
+        names.dedup();
+
+        let render = |v: Option<&Vec<String>>| v.map(|v| v.join(", ")).unwrap_or_default();
+        names
+            .into_iter()
+            .filter(|n| before.get(*n) != after.get(*n))
+            .map(|n| (n.clone(), render(before.get(n)), render(after.get(n))))
+            .collect()
     }
+}
+
+/// Whether an overlay value asks for a checkbox to be checked.
+///
+/// The falsey set used to be `"" | "false" | "off"` only, so `"0"` and `"no"`
+/// turned a box **on**.
+fn is_truthy(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "false" | "off" | "0" | "no" | "n" | "unchecked"
+    )
+}
+
+/// Count `<form` start tags in the source, skipping comments and `<script>` /
+/// `<style>` bodies, where the same text is not markup and the parser would not
+/// create an element.
+///
+/// Used only to detect that html5ever dropped a nested form; see
+/// [`FormError::NestedForms`].
+fn count_form_start_tags(html: &str) -> usize {
+    let lower = html.to_ascii_lowercase();
+    let mut i = 0usize;
+    let mut count = 0usize;
+
+    let skip_past = |from: usize, needle: &str| -> usize {
+        lower[from..]
+            .find(needle)
+            .map(|k| from + k + needle.len())
+            .unwrap_or(lower.len())
+    };
+
+    while i < lower.len() {
+        let Some(next) = lower[i..].find('<') else { break };
+        let at = i + next;
+        let rest = &lower[at..];
+        if rest.starts_with("<!--") {
+            i = skip_past(at, "-->");
+        } else if rest.starts_with("<script") {
+            i = skip_past(at, "</script>");
+        } else if rest.starts_with("<style") {
+            i = skip_past(at, "</style>");
+        } else if rest.starts_with("<form")
+            && rest[5..]
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_whitespace() || c == '>' || c == '/')
+        {
+            count += 1;
+            i = at + 5;
+        } else {
+            i = at + 1;
+        }
+    }
+    count
 }
 
 /// Reproduce the HTML "successful controls" rules for one form element.
@@ -191,7 +320,7 @@ fn collect_controls(form: ElementRef<'_>) -> Vec<Control> {
                 name: name.to_string(),
                 value: el.text().collect::<String>(),
                 submits: true,
-                toggleable: false,
+                kind: Kind::Value,
             }),
             "select" => {
                 let mut selected: Vec<String> = el
@@ -210,7 +339,7 @@ fn collect_controls(form: ElementRef<'_>) -> Vec<Control> {
                         name: name.to_string(),
                         value,
                         submits: true,
-                        toggleable: false,
+                        kind: Kind::Value,
                     });
                 }
             }
@@ -223,7 +352,7 @@ fn collect_controls(form: ElementRef<'_>) -> Vec<Control> {
                         name: name.to_string(),
                         value: v.attr("value").unwrap_or("on").to_string(),
                         submits: v.attr("checked").is_some(),
-                        toggleable: true,
+                        kind: if ty == "radio" { Kind::Radio } else { Kind::Checkbox },
                     }),
                     // Buttons contribute only when they are the control clicked,
                     // which the caller expresses through the overlay instead.
@@ -233,13 +362,13 @@ fn collect_controls(form: ElementRef<'_>) -> Vec<Control> {
                         name: name.to_string(),
                         value: String::new(),
                         submits: true,
-                        toggleable: false,
+                        kind: Kind::Value,
                     }),
                     _ => out.push(Control {
                         name: name.to_string(),
                         value: v.attr("value").unwrap_or("").to_string(),
                         submits: true,
-                        toggleable: false,
+                        kind: Kind::Value,
                     }),
                 }
             }

@@ -21,6 +21,18 @@ pub enum StoreError {
     Read(String),
     #[error("could not save the delivery record: {0}")]
     Write(String),
+    /// A saved session exists but cannot be read.
+    ///
+    /// Never treated as "there is no session". That is the path to a second
+    /// charge: an unreadable receipt used to be skipped, `current()` returned
+    /// `None`, the caller started a fresh session with a fresh id, and every
+    /// assistance item was written again under a tag that matched nothing.
+    /// See DECISIONS.md D39.
+    #[error(
+        "there is a saved delivery record that cannot be read ({0}). It may list money \
+         already sent to ServWare, so nothing new can be started until somebody looks at it."
+    )]
+    Unreadable(String),
 }
 
 pub struct SessionStore {
@@ -73,22 +85,39 @@ impl SessionStore {
         serde_json::from_str(&text).map_err(|e| StoreError::Read(e.to_string()))
     }
 
-    pub fn list(&self) -> Result<Vec<DeliverySession>, StoreError> {
+    /// Every readable session, newest first, plus the names of any that could
+    /// not be read.
+    ///
+    /// The two are returned together rather than one silently swallowing the
+    /// other: a listing wants to show what it can, while `current()` must treat
+    /// an unreadable record as a hard stop.
+    fn scan(&self) -> Result<(Vec<DeliverySession>, Vec<String>), StoreError> {
         let mut out = Vec::new();
+        let mut unreadable = Vec::new();
         let entries = std::fs::read_dir(&self.dir).map_err(|e| StoreError::Read(e.to_string()))?;
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            // A malformed file must not hide every other session.
             match std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()) {
                 Some(session) => out.push(session),
-                None => tracing::warn!(?path, "skipping unreadable session record"),
+                None => {
+                    tracing::warn!(?path, "unreadable session record");
+                    unreadable.push(
+                        path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                    );
+                }
             }
         }
         out.sort_by(|a: &DeliverySession, b: &DeliverySession| b.created_at.cmp(&a.created_at));
-        Ok(out)
+        Ok((out, unreadable))
+    }
+
+    /// Every readable session, newest first. A malformed file is skipped rather
+    /// than hiding all the others.
+    pub fn list(&self) -> Result<Vec<DeliverySession>, StoreError> {
+        Ok(self.scan()?.0)
     }
 
     /// The session still in flight, if any.
@@ -96,8 +125,17 @@ impl SessionStore {
     /// A second session is never created while one is open: models re-call tools
     /// when confused, and if starting fresh were easy a delivery night would
     /// eventually be submitted twice.
+    ///
+    /// **An unreadable record is an error, not an absence.** Returning `None`
+    /// there is indistinguishable from "no delivery in progress", which is how a
+    /// night's writes get replayed under a new session id against a tag that
+    /// matches nothing already in ServWare. See DECISIONS.md D39.
     pub fn current(&self) -> Result<Option<DeliverySession>, StoreError> {
-        Ok(self.list()?.into_iter().find(DeliverySession::is_open))
+        let (sessions, unreadable) = self.scan()?;
+        if !unreadable.is_empty() {
+            return Err(StoreError::Unreadable(unreadable.join(", ")));
+        }
+        Ok(sessions.into_iter().find(DeliverySession::is_open))
     }
 }
 

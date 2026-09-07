@@ -17,7 +17,9 @@ use serde::Deserialize;
 use crate::servware::client::ServWareClient;
 use crate::servware::error::Result;
 use crate::servware::error::ServWareError;
-use crate::servware::list::strip_nulls;
+use crate::servware::paging;
+use crate::servware::paging::Envelope;
+use crate::servware::paging::PAGE_SIZE;
 
 /// A neighbour (household) as the roster endpoint returns them.
 ///
@@ -101,16 +103,6 @@ impl NeighborSummary {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct Envelope {
-    #[serde(rename = "iTotalDisplayRecords")]
-    total_display_records: u32,
-    #[serde(rename = "aaData")]
-    data: Vec<serde_json::Value>,
-}
-
-const PAGE_SIZE: u32 = 100;
-
 /// Ten pages is a thousand neighbours — comfortably above any single
 /// conference, and still a bounded number of requests against production.
 const DEFAULT_MAX_PAGES: u32 = 10;
@@ -125,44 +117,7 @@ pub async fn fetch_all_paged(
     client: &ServWareClient,
     max_pages: u32,
 ) -> Result<Vec<NeighborSummary>> {
-    let mut out: Vec<NeighborSummary> = Vec::new();
-    let mut start = 0u32;
-    let mut pages = 0u32;
-
-    loop {
-        let envelope = fetch_page(client, start).await?;
-        pages += 1;
-        let total = envelope.total_display_records;
-        let returned = envelope.data.len();
-
-        for mut raw in envelope.data {
-            strip_nulls(&mut raw);
-            let summary: NeighborSummary = serde_json::from_value(raw).map_err(|e| {
-                ServWareError::Malformed(format!(
-                    "ServWare's neighbour format changed — {e}. This tool needs an update."
-                ))
-            })?;
-            out.push(summary);
-        }
-
-        if returned == 0 || out.len() as u32 >= total {
-            if (out.len() as u32) < total {
-                return Err(ServWareError::Malformed(format!(
-                    "ServWare reported {total} neighbours but only {} could be read",
-                    out.len()
-                )));
-            }
-            return Ok(out);
-        }
-        if max_pages != 0 && pages >= max_pages {
-            return Err(ServWareError::Malformed(format!(
-                "ServWare has {total} neighbours, which is more than this tool will page \
-                 through ({} read in {pages} requests).",
-                out.len()
-            )));
-        }
-        start += PAGE_SIZE;
-    }
+    paging::paginate("neighbours", max_pages, |start| fetch_page(client, start)).await
 }
 
 /// Query parameters reproduce a captured browser request. The per-column

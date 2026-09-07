@@ -60,12 +60,45 @@ fn item_notes_round_trip_through_tag_extraction() {
     );
 }
 
+/// The gift-card ladder is rejected while it is still text on disk.
+///
+/// It used to be guarded only by a `debug_assert!`, which is compiled out of
+/// the `--release` binary that ships -- so an external config with an empty
+/// ladder parsed happily and `gift_card_dollars` fell through to $0 for every
+/// household, silently. See DECISIONS.md D34.
 #[test]
-#[allow(clippy::field_reassign_with_default)] // start from real policy, vary one field
-fn tagging_can_be_disabled() {
-    let mut c = ConferenceConfig::default();
-    c.tag_assistance_notes = false;
-    assert_eq!(c.item_notes("01JBQ", Slot::Food, "09/05/2026"), "");
+fn an_empty_gift_card_ladder_is_refused_at_parse_time() {
+    let err = toml::from_str::<ConferenceConfig>(
+        r#"
+gift_card_ladder = []
+visit_mileage = "5"
+visit_notes_html = "<p>x</p>"
+[second_harvest]
+id = "1"
+name_contains = "Food"
+[gift_card]
+id = "2"
+name_contains = "Card"
+"#,
+    )
+    .expect_err("an empty ladder must not parse");
+    assert!(
+        err.to_string().contains("at least one amount"),
+        "the error should say what is wrong: {err}"
+    );
+}
+
+/// Every household size maps to a real amount, and never to zero.
+#[test]
+fn the_ladder_is_clamped_at_both_ends_and_never_zero() {
+    let c = ConferenceConfig::default();
+    assert_eq!(c.gift_card_dollars(0), 50, "a household of zero gets the floor");
+    assert_eq!(c.gift_card_dollars(1), 50);
+    assert_eq!(c.gift_card_dollars(6), 100);
+    assert_eq!(c.gift_card_dollars(99), 100, "past the top rung is the ceiling");
+    for size in 0..200 {
+        assert!(c.gift_card_dollars(size) >= 50, "size {size} produced a nonsense amount");
+    }
 }
 
 /// The config is compiled in with `include_str!`, so a malformed edit would
@@ -78,7 +111,13 @@ fn embedded_conference_config_parses_and_matches_practice() {
     assert_eq!(c.gift_card.id, "16522");
     assert_eq!(c.gift_card.value, None, "gift cards scale with household size");
     assert_eq!(c.gift_card_ladder, vec![50, 60, 70, 80, 90, 100]);
-    assert!(c.tag_assistance_notes, "idempotency depends on the tag");
+    // The tag is the idempotency key (D7) and is written unconditionally; there
+    // is no longer a config branch that can turn it off.
+    assert_eq!(
+        svdp::servware::detail::extract_tag(&c.item_notes("S", Slot::Food, "09/05/2026")),
+        Some("svdp:s=S;i=food".to_string())
+    );
+    assert!(c.max_item_dollars >= 100, "the ceiling must clear the top of the ladder");
 }
 
 /// An external file overrides the embedded policy; a malformed one must not.
@@ -91,7 +130,6 @@ fn external_config_overrides_but_malformed_is_ignored() {
 gift_card_ladder = [10, 20]
 visit_mileage = "9"
 visit_notes_html = "<p>x</p>"
-tag_assistance_notes = false
 [second_harvest]
 id = "1"
 name_contains = "Food"

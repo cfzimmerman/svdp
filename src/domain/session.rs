@@ -51,27 +51,15 @@ pub struct Delivery {
     pub request_id: u64,
     pub client_id: u64,
     pub name: String,
+    /// Shown on the approval screen, because it is the reason the gift card is
+    /// the amount it is. Serde ignores fields it does not know, so removing one
+    /// (as `version` and `outcome` were removed) still loads an older receipt.
     pub household_size: u32,
     pub gift_card_dollars: u32,
     pub food_dollars: u32,
-    /// ServWare's optimistic-lock counter at plan time, re-checked at submit.
-    pub version: Option<u64>,
-    /// Present from the start even though the first workflow only ever sets
-    /// `Delivered`; the call-sheet workflow needs the others and a schema
-    /// migration later would be worse.
-    pub outcome: DeliveryOutcome,
     pub food: SlotState,
     pub gift_card: SlotState,
     pub complete: SlotState,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeliveryOutcome {
-    Planned,
-    Delivered,
-    NotReached,
-    Declined,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,7 +71,8 @@ pub enum SlotState {
     /// Already present in ServWare; nothing was sent.
     Skipped,
     Failed { error: String },
-    /// Needs a human decision; never retried automatically.
+    /// Needs a human decision. A later `submit_session` will re-check ServWare
+    /// and either resolve it or report it again; nothing is written blindly.
     Conflict { reason: String },
 }
 
@@ -116,14 +105,24 @@ impl Delivery {
     }
 
     /// Total dollars this delivery records against the county's books.
+    ///
+    /// Saturating, not `+`. Release builds have overflow checks off, so plain
+    /// addition could show a volunteer an approval total that is not the sum of
+    /// the lines above it. A saturated total is visibly absurd; a wrapped one
+    /// looks plausible.
     pub fn total_dollars(&self) -> u32 {
-        self.food_dollars + self.gift_card_dollars
+        self.food_dollars.saturating_add(self.gift_card_dollars)
     }
 
     /// Slots still to write, in the order they must be written.
     ///
     /// Assistance first, completion last: a completed request leaves the Open
     /// list, so completion is the commit marker. See DECISIONS.md D7.
+    ///
+    /// A `Conflict` slot is included: it is not "done", and re-running after a
+    /// human has looked at ServWare is exactly how a conflict gets resolved.
+    /// Each write re-reads before acting, so a retry that is still conflicted
+    /// simply reports the conflict again.
     pub fn pending_slots(&self) -> Vec<Slot> {
         [Slot::Food, Slot::GiftCard, Slot::Complete]
             .into_iter()
@@ -174,26 +173,47 @@ impl DeliverySession {
         self.groups.iter().flat_map(|g| g.deliveries.iter())
     }
 
-    pub fn deliveries_mut(&mut self) -> impl Iterator<Item = &mut Delivery> {
-        self.groups.iter_mut().flat_map(|g| g.deliveries.iter_mut())
-    }
-
     /// A session still holding money that has not reached ServWare.
     pub fn is_open(&self) -> bool {
         !matches!(self.state, SessionState::Submitted | SessionState::Abandoned)
     }
 
-    /// Whether any write has been attempted. Once true, the session must not be
-    /// silently abandoned -- the audit trail is the only record of what was sent.
+    /// Whether anything is **known to have reached ServWare**. Once true the
+    /// session must not be re-planned or discarded: the audit trail is the only
+    /// record of what was sent.
+    ///
+    /// Counts only slots that are done. It used to count `Failed` too, which
+    /// meant a session where every single write failed -- Wi-Fi dropped before
+    /// the first POST, so nothing reached ServWare at all -- could be neither
+    /// re-planned ("finish or abandon it first") nor abandoned ("part of this is
+    /// already saved in ServWare"), each refusal pointing at the other. The only
+    /// exit was a successful submit, so a persistent failure wedged the
+    /// extension for every future delivery night, for an audience with no
+    /// command line. See DECISIONS.md D38.
     pub fn has_written(&self) -> bool {
-        self.deliveries()
-            .any(|d| [Slot::Food, Slot::GiftCard, Slot::Complete]
+        self.deliveries().any(|d| {
+            [Slot::Food, Slot::GiftCard, Slot::Complete]
                 .iter()
-                .any(|s| !matches!(d.slot(*s), SlotState::Pending)))
+                .any(|s| d.slot(*s).is_done())
+        })
     }
 
+    /// Whether any write was *attempted*, successfully or not. Drives the state
+    /// rollup and what a volunteer is told, never whether a session is locked.
+    pub fn has_attempted(&self) -> bool {
+        self.deliveries().any(|d| {
+            [Slot::Food, Slot::GiftCard, Slot::Complete]
+                .iter()
+                .any(|s| !matches!(d.slot(*s), SlotState::Pending))
+        })
+    }
+
+    /// Total dollars planned, saturating rather than wrapping. See
+    /// [`Delivery::total_dollars`].
     pub fn total_dollars(&self) -> u32 {
-        self.deliveries().map(Delivery::total_dollars).sum()
+        self.deliveries()
+            .map(Delivery::total_dollars)
+            .fold(0u32, u32::saturating_add)
     }
 
     /// Recompute the rollup from the per-slot states.
@@ -214,7 +234,7 @@ impl DeliverySession {
             SessionState::Submitted
         } else if any_attention {
             SessionState::NeedsAttention
-        } else if self.has_written() {
+        } else if self.has_attempted() {
             SessionState::Submitting
         } else {
             self.state

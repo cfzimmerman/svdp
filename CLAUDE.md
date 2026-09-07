@@ -57,7 +57,12 @@ Neighbour data is sensitive information about vulnerable families, and this repo
   `SVDP_LOCAL_DETAIL_HTML` and prints structure only, never values.
 - Do not print neighbour or volunteer PII into transcripts, terminal output, or logs. The
   request detail page carries names, addresses, phones, **SSN last-4**, driver's licence, and
-  the family's full request history.
+  the family's full request history. The CLI shortens names to "Ada L." unless `--full-names`
+  is passed, and `svdp snapshot` asks `git check-ignore` and **refuses to write** rather than
+  claiming a path is ignored. See DECISIONS.md D49.
+- **CSV cells are defused against formula injection.** These files exist to be double-clicked
+  into Excel and ServWare's free-text fields are typed by caseworkers, so a leading `=`/`+`/`-`/`@`
+  is quoted — except where the cell is a number, so amounts still sum.
 - **CSV exports emit an allowlist, pinned by a test.** Never SSN, driver's licence, identity
   documents, case notes, alert notes, or **dates of birth** — exports carry ages instead, so a
   spreadsheet passed between volunteers never holds name + address + DOB. In the household
@@ -74,6 +79,14 @@ Neighbour data is sensitive information about vulnerable families, and this repo
 - **Errors**: `thiserror` types at the library boundary — the MCP layer must *match* on error
   kind to choose retry / skip / escalate. `anyhow` in binaries only. (This reverses an earlier
   rule in this file that said "no custom error types"; that was right for a pure CLI.)
+  `WriteRejected` and `WriteUnverifiable` are **not interchangeable**: the first means read-back
+  proved nothing changed, the second means something may well have landed and the volunteer is
+  told *not* to retry. ServWare cannot delete an assistance item, so getting that wrong is how
+  one $70 entry becomes three. See DECISIONS.md D41.
+- **Never guard a write with `debug_assert!`.** `--release` compiles them out and `--release` is
+  what ships; two money checks existed only in debug builds. CI fails on `debug_assert!(` in
+  `src/`. Validate at parse time where possible (the gift-card ladder does), and return a typed
+  error otherwise. See DECISIONS.md D34.
 - **HTTP**: `reqwest` with a cookie jar. Base URL is **injected**, not a const, so tests point
   at a local server and exercise real cookies, redirects, and encoding.
 
@@ -95,6 +108,14 @@ Three grains, all joinable on `client_id`, written to the Desktop as CSV:
 
 Project-specific knowledge lives in `skills/pulling-svdp-data/references/`, deliberately
 overfit, because markdown gets edited next season rather than recompiled.
+
+**A parser must not return "empty" for "broken".** Silent degradation is the dominant durability
+risk here: ServWare drift produces a *confident wrong answer* rather than an error. An empty
+household roster is a real and common answer (a head count instead of people), so it must be
+distinguishable from a missing tab — otherwise a renamed element has the tool announce that no
+family in the conference has anyone living in it. Table columns are resolved by header text from
+**the first header row only**, and a body row whose cell count disagrees is an error, because the
+columns just past `Age` are Phone and **SSN (Last 4)**. See DECISIONS.md D32, D40.
 
 **Exports carry recorded fact, never derived policy.** The gift-card ladder and the food amount
 are a *delivery* decision; what another program spends is the volunteer's call. `domain::export`
@@ -120,7 +141,17 @@ sent 39 and silently cleared the other 11 (`otherVisitCnt`, `eldercareVisitCnt`,
 
 Rules encoded there, verified against a real capture:
 - Extraction is **form-scoped** — the page has other forms (a send-email modal) whose controls
-  must not leak in.
+  must not leak in. Scoping only works while those forms are *siblings*: html5ever drops a nested
+  `<form>` start tag and closes the outer form at the first `</form>`, which both absorbs the
+  modal's controls and loses every real control after it. Extraction compares a lexical count of
+  `<form` tags against the parsed count and refuses on a mismatch. See DECISIONS.md D48.
+- **Checkboxes and radios are different.** A checkbox overlay decides *whether* it submits; a
+  radio overlay picks *which* button submits, by declared value. Conflating them made
+  `overlay([("mode","B")])` submit `A`.
+- `extract_containing` is passed the **full** set of fields the caller will overlay
+  (`write::COMPLETION_FIELDS`), so a page missing one fails to parse rather than POSTing without
+  it. That constant is the only list of those fields — the write, the CLI dry run and both health
+  checks all read it. See DECISIONS.md D33.
 - `id` and `name` diverge (`id="homeVisitAssignedFirst"` is `name="visitAssignedToMemberId"`).
   **Always key on `name`.**
 - Unchecked checkboxes are **rendered but not submitted**. The full control inventory is kept
@@ -160,6 +191,11 @@ Rules encoded there, verified against a real capture:
   whole conference roster (`iTotalRecords: 416` at Nativity) as complete Client objects.
   `/app/clients/{id}` is *not* usable for household members: its roster div is XHR-filled.
 - The ~24 report routes exist and are **deliberately unexplored**; `api.md` §12 lists them.
+- **The list endpoint sorts by `mDataProp_{iSortCol_0}`, confirmed live (Sep 2026).** Two reads
+  differing only in that mapping returned the same 50 rows in different orders: per-column gives
+  `dateRequested` order, `mDataProp_N="id"` gives id order. The two are **not** interchangeable —
+  a back-dated request already sits in the first page — and every date-windowed caller assumes
+  date order. Keep `mDataProp` matching `sColumns`. See DECISIONS.md D44.
 - **Reaching an old date window needs a seek.** Rows come back newest-first, so a window a year
   back sits behind ~1,200 newer requests. `list::seek_window_start` binary-searches for it with
   single-row probes. The conference had 4,907 requests total in September 2026.
@@ -178,6 +214,11 @@ loops strands batches with no recovery path; the list call caps at 100 with no p
 
 ## Build and run
 
+CI runs on every branch (`branches: ['**']` — a fixed branch list meant it had never run at all),
+and its PII gate covers `.html` and `.json` as well as `.csv`/`.har`. Fixtures are checked by
+**provenance**: CI re-runs `scripts/gen-fixtures.py` and fails if the tree differs, which a real
+capture cannot survive. Regenerate fixtures whenever you change that script.
+
 ```bash
 cargo test                      # must pass with no network
 cargo build --bin mcp           # the MCP server
@@ -189,6 +230,7 @@ cargo run --bin svdp -- export-neighbors
 cargo run --bin svdp -- export-requests --from 06/01/2026 --to 08/31/2026
 cargo run --bin svdp -- export-household-members --from 06/01/2026 --to 08/31/2026
 cargo run --bin svdp -- snapshot --path /app/clients/123   # capture any page for a spike
+                                                          # (refuses unless git ignores the path)
 
 # Validate against a real local capture (never committed):
 SVDP_LOCAL_DETAIL_HTML=/path/detail.html cargo test --test local_capture -- --ignored --nocapture

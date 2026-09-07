@@ -22,14 +22,29 @@ fn real_detail_page_round_trips() {
     let html = std::fs::read_to_string(&path).expect("capture readable");
     // Located by contained controls, exactly as the real code does -- no
     // fallback, so a locator regression fails here rather than hiding.
-    let form = Form::extract_containing(&html, &["status", "visitNotes", "visitCompleted"])
+    let form = Form::extract_containing(&html, svdp::servware::write::COMPLETION_FIELDS)
         .expect("the request edit form is present");
 
     println!("  controls extracted: {}", form.pairs().len());
 
     // Identity: the property that makes updates safe.
+    //
+    // Compared field by field rather than with `assert_eq!` on the two vectors.
+    // This test is documented to be run with `--nocapture` against a REAL page,
+    // and a failing `assert_eq!` prints both sides in full -- which here means
+    // `clientFirstName`, `clientLastName`, `requestNote` and every other value
+    // on a live neighbour's record, straight into a terminal. The names are
+    // enough to diagnose a regression; the values are not ours to print.
     let same = form.overlay(std::iter::empty()).unwrap();
-    assert_eq!(form.pairs(), same.pairs(), "empty overlay must be identity");
+    let (before, after) = (form.pairs(), same.pairs());
+    assert_eq!(before.len(), after.len(), "empty overlay changed the field count");
+    let differing: Vec<&str> = before
+        .iter()
+        .zip(&after)
+        .filter(|(b, a)| b != a)
+        .map(|(b, _)| b.0.as_str())
+        .collect();
+    assert!(differing.is_empty(), "empty overlay altered fields: {differing:?}");
 
     // Every field the real update path overlays must exist, or we would be
     // silently writing into a form that no longer has it.
@@ -128,8 +143,10 @@ fn real_detail_page_has_household_members() {
         "the real page should carry the Household Members tab inline"
     );
 
-    let d = svdp::servware::detail::parse(0, &html).expect("detail page parses");
-    let people = &d.household_members;
+    let people = &svdp::servware::detail::parse_household_members(&scraper::Html::parse_document(
+        &html,
+    ))
+    .expect("the household members tab parses");
     let with_age = people.iter().filter(|m| m.age.is_some()).count();
     let selves = people.iter().filter(|m| m.is_self()).count();
 
@@ -147,12 +164,13 @@ fn real_detail_page_has_household_members() {
     // The identity columns sit in the same table. Nothing that looks like a
     // driver's licence or an SSN may have reached a parsed field.
     let parsed = format!("{people:?}");
-    for m in people {
-        assert!(
-            m.age.is_none_or(|a| a < 120),
-            "an implausible age means a different column was read"
-        );
-    }
+    // The parser now refuses an implausible age outright, so reaching here means
+    // every age is already in range; this re-checks the invariant against real
+    // data rather than a fixture.
+    assert!(
+        people.iter().all(|m| m.age.is_none_or(|a| a <= 120)),
+        "an implausible age means a different column was read"
+    );
     assert!(
         !parsed.contains("Drivers") && !parsed.contains("SSN"),
         "a header leaked into a parsed value"

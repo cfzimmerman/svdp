@@ -10,6 +10,12 @@
 *.har
 *.json.gz
 
+# Saved ServWare pages and list responses are as sensitive as a CSV. The
+# generated fixtures are the one exception: they are synthetic by construction
+# (scripts/gen-fixtures.py) and CI re-generates them to prove it.
+*.html
+!/tests/fixtures/*.html
+
 # Raw captures for local reverse-engineering. Never leaves this machine.
 /servware/
 /recordings/

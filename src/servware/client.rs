@@ -73,6 +73,12 @@ impl ServWareClient {
             .redirect(redirect::Policy::limited(10))
             .user_agent(USER_AGENT)
             .default_headers(headers)
+            // Without these a stalled socket hangs an MCP tool call forever:
+            // no partial result, no error, and no way for a volunteer to tell
+            // "it is slow" from "it is never coming back". The read timeout is
+            // generous because the detail page is 200 KB of server-rendered HTML.
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_secs(60))
             .build()?;
 
         Ok(Self { http, base, credentials })
@@ -84,13 +90,13 @@ impl ServWareClient {
             .map_err(|e| ServWareError::Malformed(format!("bad path {path}: {e}")))
     }
 
-    /// Authenticate. A failed login redirects back to the login page rather than
-    /// returning an error status, so the final URL is the signal.
     /// Whether credentials were supplied at all.
     pub fn is_configured(&self) -> bool {
         !self.credentials.username.trim().is_empty()
     }
 
+    /// Authenticate. A failed login redirects back to the login page rather than
+    /// returning an error status, so the final URL is the signal.
     pub async fn login(&self) -> Result<()> {
         // Every ServWare call funnels through here, so one check covers all of
         // them. The server deliberately starts without credentials so it can say
@@ -138,6 +144,11 @@ impl ServWareClient {
         let response = self.http.get(self.url(path)?).send().await?;
         if is_login_page(response.url().as_str()) {
             return Err(ServWareError::SessionExpired);
+        }
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            // Says which request is gone, rather than the generic "ServWare sent
+            // back something this tool did not understand".
+            return Err(ServWareError::NotFound(request_id_in(path)));
         }
         if !response.status().is_success() {
             return Err(ServWareError::Malformed(format!(
@@ -189,7 +200,25 @@ impl ServWareClient {
 
     /// POST a form. **The response is not evidence of success** — Spring
     /// re-renders a rejected form as 200. Callers must verify by read-back.
+    ///
+    /// Re-authenticates once on an expired session, like the GET verbs. This is
+    /// the verb that needs it most: the confirmation gate before a write is a
+    /// long human pause, and ServWare times sessions out after an hour, so the
+    /// session is likeliest to have expired at exactly this moment. It is safe
+    /// to retry because the first attempt was answered with the login page, so
+    /// the form never reached the handler.
     pub async fn post_form(&self, path: &str, pairs: &[(String, String)]) -> Result<()> {
+        match self.try_post_form(path, pairs).await {
+            Err(e) if e.is_retryable() => {
+                tracing::info!("session expired before a write; signing back in");
+                self.login().await?;
+                self.try_post_form(path, pairs).await
+            }
+            other => other,
+        }
+    }
+
+    async fn try_post_form(&self, path: &str, pairs: &[(String, String)]) -> Result<()> {
         let url = self.url(path)?;
         let response = self
             .http
@@ -213,4 +242,14 @@ impl ServWareClient {
 
 fn is_login_page(url: &str) -> bool {
     url.contains("/security/login")
+}
+
+/// The trailing numeric path segment, for a 404 message. Zero when the path
+/// carries no id, which reads as "not found" without claiming a wrong number.
+fn request_id_in(path: &str) -> u64 {
+    path.rsplit('/')
+        .find(|s| !s.is_empty())
+        .and_then(|s| s.split('?').next())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
 }

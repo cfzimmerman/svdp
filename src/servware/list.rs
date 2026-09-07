@@ -16,6 +16,9 @@ use serde::Deserialize;
 use crate::servware::client::ServWareClient;
 use crate::servware::error::Result;
 use crate::servware::error::ServWareError;
+use crate::servware::paging;
+use crate::servware::paging::Envelope;
+use crate::servware::paging::PAGE_SIZE;
 
 /// Fields this tool actually depends on. Everything here is required; a missing
 /// or mistyped field is an error, not a default.
@@ -23,9 +26,6 @@ use crate::servware::error::ServWareError;
 #[serde(rename_all = "camelCase")]
 pub struct RequestSummary {
     pub id: u64,
-    /// Hibernate optimistic-lock counter. Recorded at plan time and re-checked
-    /// at submit time to detect edits made in ServWare meanwhile.
-    pub version: u64,
     pub status: String,
     pub date_requested: String,
     /// Drives the gift-card amount. Must never silently default.
@@ -71,13 +71,21 @@ pub struct ClientSummary {
 /// the same as when they asked. ServWare's own Neighbor Assistance Summary
 /// report is built on this date, so any export claiming to answer "how much did
 /// this family receive between two dates" has to carry it. See DECISIONS.md D23.
+///
+/// `monetary_value` and `date_provided` are `Option`, not defaulted scalars.
+/// They used to default to `0.0` and `""`, so a renamed `monetaryValue` wrote
+/// `0.00` into the assistance CSV — indistinguishable from an item that really
+/// was worth nothing — and an empty `date_provided` silently emptied the
+/// delivery-recency check while `fetch_window` still returned `Ok`. An absent
+/// value now reads as absent everywhere: a blank cell in the spreadsheet, and a
+/// row the recency check knows it does not have. See DECISIONS.md D43.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistanceItemSummary {
     #[serde(default)]
-    pub monetary_value: f64,
+    pub monetary_value: Option<f64>,
     #[serde(default)]
-    pub date_provided: String,
+    pub date_provided: Option<String>,
     #[serde(default)]
     pub quantity: f64,
     #[serde(default)]
@@ -100,9 +108,25 @@ impl AssistanceItemSummary {
 }
 
 impl RequestSummary {
-    /// Total dollars recorded against this request.
+    /// Total dollars recorded against this request, ignoring items that carry no
+    /// amount at all.
     pub fn assistance_total(&self) -> f64 {
-        self.assistance_items.iter().map(|i| i.monetary_value).sum()
+        self.assistance_items
+            .iter()
+            .filter_map(|i| i.monetary_value)
+            .sum()
+    }
+
+    /// Items that carry no monetary value.
+    ///
+    /// Reported rather than silently treated as zero: if it is *every* item, the
+    /// field has probably been renamed and no total from this pull is safe to
+    /// rely on.
+    pub fn items_without_value(&self) -> usize {
+        self.assistance_items
+            .iter()
+            .filter(|i| i.monetary_value.is_none())
+            .count()
     }
 
     pub fn display_name(&self) -> String {
@@ -125,14 +149,6 @@ impl RequestSummary {
             .collect::<Vec<_>>()
             .join(", ")
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct Envelope {
-    #[serde(rename = "iTotalDisplayRecords")]
-    total_display_records: u32,
-    #[serde(rename = "aaData")]
-    data: Vec<serde_json::Value>,
 }
 
 /// Which requests to list. `Open` is the working set; `Any` is needed to read a
@@ -171,8 +187,6 @@ impl SortDir {
     }
 }
 
-const PAGE_SIZE: u32 = 100;
-
 /// Refuse to walk more pages than this without an explicit opt-in.
 ///
 /// ServWare is production and every page is a request against it. An unfiltered
@@ -204,48 +218,10 @@ pub async fn fetch_all_paged(
     filter: StatusFilter,
     max_pages: u32,
 ) -> Result<Vec<RequestSummary>> {
-    let mut out: Vec<RequestSummary> = Vec::new();
-    let mut start = 0u32;
-    let mut pages = 0u32;
-
-    loop {
-        let envelope = fetch_page(client, filter, start, SortDir::Asc).await?;
-        pages += 1;
-        let total = envelope.total_display_records;
-        let returned = envelope.data.len();
-
-        for raw in envelope.data {
-            // Strip nulls so `#[serde(default)]` can apply to the *optional*
-            // fields; required fields still fail loudly when absent.
-            let mut raw = raw;
-            strip_nulls(&mut raw);
-            let summary: RequestSummary = serde_json::from_value(raw).map_err(|e| {
-                ServWareError::Malformed(format!(
-                    "ServWare's request format changed — {e}. \
-                     This tool needs an update; nothing was written."
-                ))
-            })?;
-            out.push(summary);
-        }
-
-        if returned == 0 || out.len() as u32 >= total {
-            if (out.len() as u32) < total {
-                return Err(ServWareError::Malformed(format!(
-                    "ServWare reported {total} requests but only {} could be read",
-                    out.len()
-                )));
-            }
-            return Ok(out);
-        }
-        if max_pages != 0 && pages >= max_pages {
-            return Err(ServWareError::TooBroad(format!(
-                "There are {total} matching requests, which is more than this will read in \
-                 one go ({} read so far). Narrow it down rather than fetching everything.",
-                out.len()
-            )));
-        }
-        start += PAGE_SIZE;
-    }
+    paging::paginate("requests", max_pages, |start| {
+        fetch_page(client, filter, start, SortDir::Asc)
+    })
+    .await
 }
 
 async fn fetch_page(
@@ -291,8 +267,16 @@ async fn fetch_page_sized(
         for (k, v) in &query {
             qs.append_pair(k, v);
         }
-        for i in 0..12 {
-            qs.append_pair(&format!("mDataProp_{i}"), "id");
+        // Per column, exactly as the captured browser request sends them
+        // (api.md:163, api.md:182). These collapsed into a loop that wrote
+        // "id" for all twelve while `iSortCol_0=3` still said "sort by column
+        // 3" -- and column 3 is `dateRequested`. DataTables resolves the sort
+        // property as `mDataProp_{iSortCol_0}`, so the request contradicted
+        // itself in the one parameter that decides the ordering, and every
+        // caller below assumes rows arrive newest-first by date.
+        // See DECISIONS.md D44.
+        for (i, col) in columns.split(',').enumerate() {
+            qs.append_pair(&format!("mDataProp_{i}"), col);
             qs.append_pair(&format!("bSortable_{i}"), "true");
         }
         qs.finish()
@@ -303,21 +287,6 @@ async fn fetch_page_sized(
         .await?;
     serde_json::from_value(raw)
         .map_err(|e| ServWareError::Malformed(format!("unexpected list response: {e}")))
-}
-
-/// Remove null-valued keys so `#[serde(default)]` applies to optional fields.
-/// Required fields are unaffected and still fail when genuinely absent.
-pub(crate) fn strip_nulls(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            map.retain(|_, v| !v.is_null());
-            for v in map.values_mut() {
-                strip_nulls(v);
-            }
-        }
-        serde_json::Value::Array(items) => items.iter_mut().for_each(strip_nulls),
-        _ => {}
-    }
 }
 
 /// Parse a ServWare date. Every date on the wire is `MM/DD/YYYY`.
@@ -424,13 +393,15 @@ async fn seek_window_start(
 ///
 /// Walks newest-first, skips ahead to where the window begins, and stops at its
 /// far edge. With no `from` this is a full-history walk and the caller must have
-/// decided that is what it wants -- `max_pages` still bounds it.
+/// decided that is what it wants -- [`WINDOW_MAX_PAGES`] still bounds it.
+///
+/// The budget is not a parameter: all four call sites passed the same constant,
+/// so it was a knob nothing turned.
 pub async fn fetch_window(
     client: &ServWareClient,
     filter: StatusFilter,
     from: Option<chrono::NaiveDate>,
     to: Option<chrono::NaiveDate>,
-    max_pages: u32,
 ) -> Result<Vec<RequestSummary>> {
     let total = fetch_page_sized(client, filter, 0, SortDir::Desc, 1)
         .await?
@@ -453,16 +424,7 @@ pub async fn fetch_window(
         let total = envelope.total_display_records;
         let returned = envelope.data.len();
 
-        let mut page: Vec<RequestSummary> = Vec::with_capacity(returned);
-        for mut raw in envelope.data {
-            strip_nulls(&mut raw);
-            let summary: RequestSummary = serde_json::from_value(raw).map_err(|e| {
-                ServWareError::Malformed(format!(
-                    "ServWare's request format changed — {e}. This tool needs an update."
-                ))
-            })?;
-            page.push(summary);
-        }
+        let page: Vec<RequestSummary> = paging::decode_rows(envelope.data, "requests")?;
 
         let past = page_is_past(&page, from);
         out.extend(
@@ -473,9 +435,12 @@ pub async fn fetch_window(
         if past || returned == 0 || start + PAGE_SIZE >= total {
             return Ok(out);
         }
-        if max_pages != 0 && pages >= max_pages {
-            return Err(ServWareError::Malformed(format!(
-                "ServWare has {total} requests in total and the window is still open after                  {pages} pages ({} rows kept). Narrow the date range.",
+        if pages >= WINDOW_MAX_PAGES {
+            // Guidance, not a fault: `Malformed` would replace this sentence
+            // with "ServWare sent back something this tool did not understand".
+            return Err(ServWareError::TooBroad(format!(
+                "ServWare has {total} requests in total and the date range is still open \
+                 after {pages} pages ({} kept so far). Narrow the date range.",
                 out.len()
             )));
         }

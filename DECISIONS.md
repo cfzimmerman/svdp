@@ -853,3 +853,454 @@ back into the README.
 expected to work rather than known to. That belongs in the maintainer's guide rather than only in
 a conversation, because it is the first thing a new maintainer needs and the last thing anyone
 thinks to write down.
+
+---
+
+# Code review, September 2026
+
+The entries below (D32–D50) come from a full-repository review of the
+`feature/claude-rewrite` branch before it was relied on unchanged for a season. The branch's
+whole test suite was green throughout, so **every one of these is something the suite did not
+catch, and several are things the suite actively asserted the wrong way round.**
+
+The recurring shape is worth naming, because it will recur: *a stated invariant was not enforced
+by the mechanism that claimed to enforce it.* The architecture was not the problem — no entry
+below overturns a design decision. What failed was the distance between a comment and its check.
+
+Four findings were confirmed by running code rather than by reading it, and those are marked.
+
+## D32. A missing household tab is an error, not an empty family
+
+`parse_household_members` returned `Vec::new()` for a page whose `#tabs-familymembers` div or
+`Age` header had gone, which is **the same value it returns for a household ServWare records
+only as a head count** — a real and common case (19 of 158 in one window, D19).
+
+`pull::household_members` derives "this family has nobody listed" purely from that emptiness. So
+a renamed tab id would have had the tool announce, with total confidence, *"IMPORTANT: 158 of
+those households have nobody listed"* — a sentence that reads exactly like a correct answer and
+would have removed every child in the conference from an Adopt-a-Family list.
+
+Now three outcomes are kept apart: rows, a legitimately empty roster (tab present, no table), and
+an error (tab absent, or a required column missing). `pull` adds a rate canary: if *every*
+household in a pull of five or more comes back empty, that is a broken parser rather than an
+answer, and it refuses.
+
+**Rejected:** keeping the empty return and adding a warning. A warning next to a confident number
+gets read as a caveat, not as "this number is wrong".
+
+## D33. One list of the fields a completion write touches
+
+`write::COMPLETION_FIELDS` is now the single source of truth, read by the write, by the CLI dry
+run, and by both health checks. It was previously spelled out in four places with three different
+memberships:
+
+- `write.rs` overlaid 9 fields, appending `requestAssignedToMemberId` only when the county's
+  intake slot is empty (D17).
+- `main.rs` re-declared the list by hand and set that field **unconditionally** — so
+  `svdp complete --dry-run`, the maintainer's only gate before an irreversible production write,
+  printed a change the write would deliberately not make.
+- `main.rs`'s health check knew all 9; `mcp.rs`'s — the one volunteers actually run, and the one
+  the skill tells them to run first — checked 3, and so would have reported all-clear after
+  ServWare renamed any of the other six, surfacing the failure mid-submission with money logged.
+
+The list is also passed to `Form::extract_containing` as the required-control set, so a page
+missing any of them now fails to parse rather than silently omitting a field from the POST.
+
+The health probe also switched from `StatusFilter::Open` to `Any`: nested inside
+`if let Some(first) = requests.first()`, it printed "No open requests right now" on a quiet week
+and reported healthy having checked nothing at all.
+
+## D34. `debug_assert!` is not a safety mechanism in a shipped binary
+
+`Cargo.toml` has no `[profile.release]`, and both `ci.yml` and `scripts/build-mcpb.sh` build with
+`--release`, so `debug-assertions` is off in **everything that ships**. Two money guards were
+written as `debug_assert!` and therefore did not exist in production:
+
+- `write.rs`'s check that a completion touches at most 9 fields, whose comment read *"Clobbering
+  becomes impossible by construction rather than by care."*
+- `policy.rs`'s check that the gift-card ladder is non-empty. **Verified by running it:** an
+  external `conference.toml` with `gift_card_ladder = []` parsed with no complaint, and
+  `gift_card_dollars` fell through `.get(i).or_else(last).unwrap_or(&0)` to **$0 for every
+  family**, silently.
+
+Both are now real checks in different places, chosen deliberately:
+
+- The ladder is validated **at parse time** with `#[serde(deserialize_with)]`. An invalid override
+  is then caught by the existing "ignoring malformed conference config" path and the reviewed
+  embedded policy is used instead — so no code downstream needs an opinion about what to pay a
+  family when the ladder is missing, and the non-empty invariant holds by construction.
+- The completion write asserts the *precise* property ("only fields in `COMPLETION_FIELDS`
+  changed") rather than the weaker count, and returns `FormChanged` rather than panicking.
+
+CI now fails on any `debug_assert!(` in `src/`, because the next person will reach for it too.
+
+**Rejected:** turning on `debug-assertions` in release. It would make these particular checks
+work while leaving the general lesson unlearned, and a panic is the wrong failure mode for an MCP
+server a volunteer is talking to.
+
+## D35. The same-kind-same-day guard is always on, and `tag_assistance_notes` is gone
+
+The config flag had two arms. The `true` arm (the only one any shipped config selected) used the
+notes tag as the idempotency key. The `false` arm was a **complete second idempotency scheme**
+keyed on `(kind, date)` — the key D7 explicitly rejects as unsound — that nothing ever ran.
+
+Deleting the flag removes the dead path. But the `(kind, date)` check inside it was doing
+something D7 does *not* cover and that is genuinely valuable, so it is kept and made
+unconditional: the tag can only recognise **this tool's own work**, and a volunteer may have
+typed the same entry into the ServWare website by hand. That is a second $70 nobody can delete.
+
+The distinction that makes this consistent with D7: `(kind, date)` is not used as an idempotency
+key — it never decides "already done". It returns `Conflict`, which asks a human. D7's objection
+was to *guessing* with it, not to *escalating* on it.
+
+It also covers the failure in D41 from the other side: if our own tag becomes unreadable, this
+guard fires and a person looks, instead of a retry loop posting the money again.
+
+## D36. An amount ceiling, because ServWare has no delete
+
+Nothing stood between the model's JSON and the POST. `PlannedDelivery.gift_card_dollars` was
+taken verbatim, so a typo or a hallucinated figure became money in the county's books that cannot
+be taken back out. `conference.toml` now carries `max_item_dollars = 500`, checked before the
+write, with a message saying a genuinely larger amount is entered on the website by hand.
+
+This is **not a policy figure** and must not be read as one — the volunteer's number always wins
+within it (D24). It is a bound on what can reach ServWare at all.
+
+Relatedly, `Delivery::total_dollars` used plain `+` on `u32`. Release builds have overflow checks
+off, so the approval screen could show a total that was not the sum of the lines above it. Both
+totals now saturate: a saturated total is visibly absurd, a wrapped one looks plausible.
+
+## D37. The optimistic-lock check is removed, because it could never fire
+
+`mark_complete` compared `before.form.get("version")` against the version recorded at plan time.
+`version` comes from the **JSON list endpoint**; the HTML edit form has no such control.
+**Verified against the real capture: 50 named controls, none of them `version`** — so the `&&`
+chain short-circuited and the comparison never ran. `tests/submit_engine.rs` named the parameter
+`_expected_version`, so nothing could have caught it.
+
+A check that cannot fire is worse than no check, because D14 and the code comments both cited it
+as a safeguard. `expected_version` is gone from the backend trait and `Delivery::version` with
+it.
+
+What actually detects the conflict that happens: `before.is_completed()` catches somebody else
+closing the request, and D35's guard catches somebody else logging the same assistance.
+
+**Rejected:** fetching the list at submit time to get a live version. That is an extra production
+request per delivery to detect edits that do not change anything we write.
+
+## D38. `has_written()` means "reached ServWare", not "was attempted"
+
+It counted `SlotState::Failed`. So a session in which **every write failed** — Wi-Fi dropped
+before the first POST, nothing reached ServWare at all — could be neither re-planned
+(*"finish or abandon it before starting another"*) nor abandoned (*"Part of this delivery is
+already saved in ServWare"*, which was false). Each refusal pointed at the other. The only exit
+was a *successful* submit, so a persistent failure wedged the extension for **every future
+delivery night**, for an audience with no command line and no way to delete a file.
+
+`has_written()` now counts only slots that are done; `has_attempted()` is separate and drives the
+state rollup and the wording. `docs/for-volunteers.md` promises *"If it stops halfway, nothing is
+lost. Ask it to carry on"* — that promise is now true.
+
+`SlotState::Conflict`'s doc comment claimed it is "never retried automatically" while
+`pending_slots()` included it. The **comment** was wrong: re-running after a human has looked at
+ServWare is exactly how a conflict gets resolved, and every write re-reads before acting.
+
+## D39. An unreadable session record is an error, never "no session"
+
+`SessionStore::current()` mapped a session file that would not parse to `None`, and
+`update_session_plan` matched `Ok(Some(..))` with a `_ => DeliverySession::new(..)` fallback. So
+an `Err` from `read_dir`, or one field added to `Delivery` (the session types carry no
+`#[serde(default)]`), silently started a **fresh session with a fresh id** over in-flight
+receipts — and because the idempotency tag embeds the session id, every tag then matched nothing
+already in ServWare and a three-family night was logged twice.
+
+`current()` now scans and fails loudly on any unreadable record; `list()` keeps its lenient
+behaviour for display, where one bad file must not hide the others. `update_session_plan` and the
+other callers handle `Err` explicitly rather than folding it into the `_` arm.
+
+Note the asymmetry that makes this safe going forward: serde ignores *unknown* fields, so
+**removing** a field from `Delivery` still loads an older receipt, while adding one without
+`#[serde(default)]` does not. `version` and `outcome` were removed on that basis.
+
+## D40. Header cells and body cells must be counted the same way
+
+Both table parsers built their column list from `table.select("th")` — every `<th>` anywhere in
+the table — while addressing body cells by `<td>` index. That quietly assumes the two agree. A
+`<th scope="row">` first cell, a `<tfoot>`, a second header row or a `<th colspan=2>` breaks it.
+
+In the household table the live column order is First / Last / Relationship / **Age** / Phone /
+**SSN (Last 4)** / Drivers License, so a two-column skew reads the SSN cell — and
+`"9999".parse::<u32>()` succeeds, putting it in `svdp-household-members-*.csv` and then into the
+conversation via `read_export`. The existing `detail_members_shifted.html` fixture inserts a
+matched `th`+`td` pair, so it was structurally incapable of catching this.
+
+Three changes: the header scan is now scoped to the **first row that has any** `<th>`; every body
+row must have exactly as many `<td>` as the header has cells or parsing fails; and the age
+plausibility bound (`<= 120`) moved out of the `#[ignore]`d local-capture test into production,
+where an implausible value is refused rather than exported. The refusal deliberately does not
+quote the value it refused.
+
+## D41. The idempotency tag rode on the one optional column
+
+In the assistance-items parser, `assistance`, `value` and `date provided` were hard-required
+while `notes` — which carries the tag, and is therefore the entire idempotency mechanism — was
+optional. Renaming that header to "Note" would make `has_item_tagged()` **permanently false**.
+
+The failure then presented backwards, which is what made it dangerous. `add_assistance_item`
+would POST $70, re-read, find no tag, and return `WriteRejected`, whose volunteer-facing text is
+*"ServWare would not accept the $70 food entry. Nothing was written."* `submit_session` added
+*"Nothing was lost and nothing was recorded twice. Running submit_session again will pick up only
+what is missing."* **Both sentences were false, and the retry posted another $70.**
+
+`notes` is now required like the other three. Two further changes make the class of failure safe
+rather than only this instance of it:
+
+- A new `WriteUnverifiable` error, distinct from `WriteRejected`. If the item count grew but our
+  tag did not appear, something landed and we cannot recognise it. Its message says so and says
+  **not to retry** — the opposite of what the old message said.
+- Read-back now verifies the **amount and the assistance type**, not merely that a tag exists.
+  The assistance form is hand-enumerated (30 fields, matching the captured browser POST), so if
+  ServWare renamed `monetaryValue`, Spring would re-render 200, create the item at its own
+  default (`api.md` records $100 for gift cards), and the tag would still be there — reporting
+  success over a wrong number in the county's books.
+
+**Rejected:** routing the assistance write through `Form::extract_containing` + `overlay` to get
+the `UnknownField` canary, as D5 requires of the completion write. It would cost an extra
+production GET per item, and read-back of the amount detects the same rename. The 30-field
+golden is cross-checked against a real captured POST by an opt-in test, which passed.
+
+## D42. One paginator
+
+The DataTables contract — envelope, page size, null-strip, decode, compare against
+`iTotalDisplayRecords` — existed twice over in `list.rs` and `clients.rs`, with a third copy of
+the decode inside `fetch_window`. It now lives once, in `servware/paging.rs`.
+
+This is the review's clearest argument that duplication is a correctness problem and not a tidiness
+one, because **the copies had already drifted**. One reported an exhausted page budget as
+`TooBroad`, whose message is written for a volunteer and reaches them verbatim ("Narrow the date
+range"); the other two reported the same situation as `Malformed`, which replaces it with
+*"ServWare sent back something this tool did not understand. Nothing was written."* — the exact
+regression D25 exists to prevent. The test meant to pin it built a `TooBroad` by hand and never
+called either paginator, so it was vacuous.
+
+## D43. Money and delivery dates are `Option`, not defaulted scalars
+
+`monetary_value: f64` and `date_provided: String` were `#[serde(default)]`, reintroducing the
+silent-default class D10 removed — while `calculated_household_count` directly above them was
+correctly required. A renamed `monetaryValue` wrote `0.00` into `svdp-assistance-*.csv`,
+indistinguishable from an item that really was worth nothing, in the very table D23 says was
+reconciled against a volunteer's hand-built spreadsheet.
+
+They are now `Option`. An absent value reads as absent everywhere: a **blank cell** in the
+spreadsheet rather than `0.00`, and a row the recency check knows it does not have.
+
+**Rejected:** making them required, like `calculated_household_count`. No capture available
+locally shows whether a legitimately non-monetary (in-kind) item sends `null`, and a required
+field that is sometimes legitimately absent would fail every export. `Option` is honest under
+both readings. The drift signal is recovered instead by canaries at the two places it matters: if
+*every* item in a pull lacks an amount, the export tool says the money columns cannot be trusted.
+
+The same defaults had disabled the 28-day interval entirely. `DeliveryRecency::from_history`
+reads only `date_provided`, so a rename produced zero entries while `fetch_window` still returned
+`Ok`; `history_failed` was set only on `Err`, every request then looked due, and the tool printed
+*"Both lists are the same: no family here has had a delivery in the last 28 days"* to the person
+deciding tonight's route. `DeliveryRecency::is_empty()` already existed for exactly this check
+and had no caller outside tests. It is now wired in: an `Ok` carrying no usable dates is reported
+as *could not check*, never as *nobody is due*.
+
+## D44. `mDataProp` must agree with `sColumns`
+
+`list.rs` emitted `mDataProp_N=id` for all twelve columns in a loop, while still sending
+`iSortCol_0=3` and an `sColumns` whose column 3 is `dateRequested`. DataTables resolves the sort
+property as `mDataProp_{iSortCol_0}`, so the request contradicted itself in the one parameter
+that decides the ordering. The captured browser request (`api.md` §163, §182) and the pre-rewrite
+code both send `mDataProp_3=dateRequested`; `clients.rs` still mapped per column correctly.
+
+Everything downstream assumes newest-first by date: `seek_window_start` binary-searches on the
+premise that `dateRequested` decreases monotonically with offset, `page_is_past` stops paging on
+a page's last row, and `latest_per_household` takes the first sighting of a client id as their
+newest request. Id order and date order agree closely for auto-increment ids, so this looks fine
+**until a back-dated request appears**, at which point families are silently omitted from an
+export.
+
+Restored to match the capture, and then **confirmed against production** — two reads, identical
+but for the mDataProp mapping, `iSortCol_0=3` / `sSortDir_0=desc`, first 50 of 4,907 rows:
+
+| mapping sent | rows in `dateRequested` order | rows in `id` order |
+|---|---|---|
+| `mDataProp_N` per column (the capture, and the fix) | **yes**, 0 breaks | no, 1 break |
+| `mDataProp_N="id"` for all twelve (what the code sent) | no, 1 break | **yes**, 0 breaks |
+
+The same fifty rows came back in a different order. So the server does resolve the sort as
+`mDataProp_{iSortCol_0}`, and the old query was returning **id order** to callers that every one
+of them read as date order.
+
+That makes this a **live defect, not a latent one**. The single inversion is the point: a
+back-dated request already sits inside the first page of the conference's history, so id order and
+date order had already diverged at the newest end — where `seek_window_start` probes and where
+`page_is_past` decides to stop. Any date-windowed export run before this fix could have omitted
+families, silently.
+
+The probe was a throwaway `examples/sortprobe.rs` against the real `ServWareClient`, deleted after
+use. It printed only monotonicity and inversion counts — never an id, a date, or a name.
+
+## D45. One bad page does not discard the whole pull
+
+`pull::household_members` used `?` inside a loop over up to 200 households at 150 ms each, so a
+transient 502 at household 180 unwound and threw away all 180 rosters already fetched — three
+minutes of somebody else's production traffic wasted, and a retry that pays for all 200 again.
+This is the same `?`-in-a-batch-loop defect `CLAUDE.md` lists among the legacy path's known
+defects, and that `submit.rs` deliberately fixed on the write side.
+
+Unreadable pages are now skipped, counted, and **named in the tool's output**, because a
+household missing from an Adopt-a-Family list is a family missing from the programme.
+
+The roster pull also stopped going through `detail::fetch`, which hard-requires the request
+**edit form** — a form the roster pull does not use and has no business failing on.
+`detail::fetch_household_members` reads only what it needs.
+
+## D46. The test fake must be keyed the way production is keyed
+
+`tests/submit_engine.rs`'s fake backend keyed idempotency on `(request_id, slot)` and ignored its
+`_session_id` parameter entirely. Production computes `svdp:s=<session>;i=<slot>` and asks
+ServWare whether an item carries that exact tag.
+
+The two disagree precisely when the session id changes — which is the one case
+`a_lost_session_record_still_cannot_double_charge` existed to cover. It asserted `skipped == 9`
+and passed, while what production would really have done is write every item a second time.
+
+**This is the entry that most deserves re-reading.** The most safety-critical test in the
+repository was green because its double was wrong, and no amount of reading the test would have
+shown it — only comparing the double against the thing it doubles.
+
+The fake now mirrors both production guards (tag, then same-kind-same-day) and the test asserts
+what actually happens: a replay under a new session id writes **nothing** and raises three
+conflicts for a person to decide, rather than quietly recognising work it cannot recognise. A
+separate test covers the honest tag case: a replay with the *same* id skips all nine.
+
+## D47. Every export header is pinned exactly
+
+`CLAUDE.md` says "CSV exports emit an allowlist, pinned by a test" and D21 specifies a test "that
+asserts the emitted header equals it exactly". Only `MEMBERS_HEADER` had one. `NEIGHBORS_HEADER`
+and `REQUESTS_HEADER` were pinned by length plus one element — which cannot catch a **replaced**
+column, since swapping `marital_status` for `income_level` leaves the length at 22 — and
+`ASSISTANCE_HEADER` was omitted from the forbidden-substring loop altogether.
+
+**Verified by doing it:** adding `client_ssn_last_four`, `client_date_of_birth` and `case_notes`
+to `ASSISTANCE_HEADER` with matching row values made `cargo test --all-targets` pass with zero
+failures. That table already emits a first and last name on every row, so the resulting Desktop
+CSV — the one volunteers email each other — would have carried the exact name + address + DOB +
+SSN combination D21 exists to prevent.
+
+All four headers are now asserted as literals, and a single `ALL_HEADERS` list drives the PII
+assertions so a fifth export cannot be added without them applying to it.
+
+## D48. What the form engine actually guaranteed
+
+Three of `form.rs`'s stated invariants did not hold. Two were **reproduced by running code**
+against this repository's own `scraper` build.
+
+**Nested forms defeat scoping, and nothing downstream can tell.** html5ever implements the HTML5
+rule: an inner `<form>` start tag is *dropped*, and the first `</form>` closes the outer form. So
+a modal nested inside the edit form yields one form that has absorbed the modal's controls and
+**lost every real control after it** — precisely the "sent 39 of 50 and silently cleared 11"
+defect this module exists to prevent. The existing fixture places modals as siblings, so
+`ignores_other_forms_on_the_page` could not have caught it.
+
+The information is destroyed by the parser before any of our code runs, so it cannot be recovered
+after parsing. Extraction now compares a lexical count of `<form` start tags in the source
+(skipping comments, `<script>` and `<style>`) against the parsed count and **refuses** on a
+mismatch. **Verified against the live page: eight forms, all siblings, none nested** — so this
+does not fire today, and it is a canary for ServWare moving a modal inside the edit form.
+
+**`overlay` discarded the requested value for checkboxes and radios.** A single
+`toggleable: bool` conflated two different controls. On a radio group, `overlay([("mode","B")])`
+returned `mode=A`: the first same-named control took `submits = true` with *its own* declared
+value, and every later occurrence — including the checked one — was forced off. The falsey set
+was `"" | "false" | "off"` only, so `"0"` and `"no"` turned a checkbox **on**. `visitCompleted`
+and `homeVisitRequired` work today only because ServWare happens to render `value="true"`.
+Checkboxes and radios are now distinct kinds; a radio is selected *by* the requested value and an
+undeclared value is an error rather than a silent fallback.
+
+**`diff` could not see repeated names.** It resolved the after-value with `other.get(&name)`,
+which returns only the first submitting control — so duplicated keys, which this module's own doc
+says ServWare's POSTs repeat, produced phantom differences and hid real drops. On the screen a
+volunteer approves immediately before the only irreversible step. It now compares the full
+multiset of submitted pairs.
+
+`Form::extract` was deleted. Production used `extract_containing`; `extract` had only test
+callers — so the form-scoping tests were exercising a function that did not ship, which is part
+of why the nesting defect went unnoticed. The tests now call what production calls.
+
+## D49. The PII gates that were not gates
+
+The repository is public, so every one of these is permanent if it fires once.
+
+- **CI had never run.** `on: push: branches: [main, claude-rewrite]` never matched the real
+  working branch `feature/claude-rewrite`. Every check below it was therefore unverified, which
+  is why this is listed first. Now `branches: ['**']`.
+- **The data gate did not cover the formats at risk.** It matched `.csv`, `.har`, `.har2` — not
+  `.html` or `.json`, so a real ServWare page or list response committed into `tests/fixtures/`
+  passed clean. It now covers both outside an explicit allowlist, and `.gitignore` globs `*.html`
+  with a negation for the fixtures.
+- **Fixtures are checked by provenance, not by pattern.** Since D12 says fixtures are synthetic
+  *by construction*, CI now re-runs `scripts/gen-fixtures.py` and fails if the tree differs. That
+  is a far stronger guarantee than grepping committed files for things that look like PII: a real
+  capture cannot survive it.
+- **The phone check was wired backwards.** It piped `grep -rIlE` — which prints *filenames* —
+  into `grep -v '555-01'`, so it filtered filenames rather than matches. It was vacuous, and had
+  it worked it would have failed CI on a correctly reserved number like `650-555-0142`. Now
+  matched on content.
+- **`svdp snapshot` wrote real PII while asserting the opposite.** `--out` resolves against the
+  process working directory while `.gitignore` anchors `/recordings/` at the repository root, so
+  `recordings/detail.html` was ignored but `src/recordings/detail.html` was not, and `--out .`
+  was accepted — while the command printed *"this file contains real neighbour data and is
+  gitignored"* either way. It now asks `git check-ignore` and **refuses to write** if the answer
+  is no. The page carries names, addresses, phones, SSN last-4, driver's licence and case notes.
+- **CSV exports are defused against formula injection.** These files exist to be double-clicked
+  into Excel, and ServWare's free-text fields are typed by caseworkers, so a cell beginning `=`,
+  `+`, `-` or `@` was live code on a volunteer's machine. Such cells are now prefixed with an
+  apostrophe — except where the cell parses as a number, so a negative amount stays a number
+  rather than becoming text that will not sum.
+- **`tests/local_capture.rs` printed neighbour data on failure.** `assert_eq!(form.pairs(),
+  same.pairs())`, in a test documented to be run with `--nocapture` against a *real* page, prints
+  both sides in full — `clientFirstName`, `clientLastName`, `requestNote` and every other value
+  on a live record. It now compares field by field and reports only names.
+- **`svdp requests` and `svdp volunteers` printed full names to stdout**, against `CLAUDE.md`'s
+  explicit rule and in a CLI an agent runs inside this repository. They now print "Ada L." unless
+  `--full-names` is passed.
+- **`HouseholdMember::last_name` was read out of the DOM and never emitted.** D21 says an
+  identity column that is not exported should not be read at all; it is gone.
+
+## D50. Transport hardening
+
+- **There was no HTTP timeout anywhere.** A stalled socket hung an MCP tool call forever: no
+  partial result, no error, and no way for a volunteer to tell "slow" from "never coming back".
+  Now 15 s to connect and 60 s overall — generous, because the detail page is 200 KB of
+  server-rendered HTML.
+- **`post_form` was the only verb with no re-authentication retry**, while `get_html` and
+  `get_json` both had one. `CLAUDE.md` calls transparent re-auth "a functional requirement"
+  precisely because ServWare times sessions out after an hour and the confirmation gate before a
+  write is a long human pause — so the session is likeliest to have expired at exactly that
+  moment. Safe to retry, because the first attempt was answered with the login page and the form
+  never reached the handler.
+- **`ServWareError::NotFound` had no construction site**, so a 404 surfaced as the generic
+  "ServWare sent back something this tool did not understand". It is now raised where it belongs.
+  `ServWareError::Conflict` had none either and, unlike `NotFound`, nothing needed it —
+  conflicts travel as `WriteOutcome::Conflict` — so it was deleted.
+
+## D51. What was deliberately left alone
+
+Recorded so it is not re-derived as an oversight.
+
+- **Six detail-page GETs per family.** `mark_complete` and each `add_assistance_item` read before
+  and after writing, which is 6 round trips per household where 4 would do. Reusing a read across
+  writes would weaken the read-before-write property that D7 and D9 rest on, to save requests on
+  a run that already paces itself. Not worth the trade.
+- **`api.md` needed no correction.** On the `mDataProp` question (D44) the document was right and
+  the code had drifted from it, which is the opposite of the usual direction that `CLAUDE.md`
+  warns about.
+- **The 30-field assistance form stays hand-enumerated.** See D41's rejected alternative.
+- **`Delivery::household_size` was kept**, though it had no reader. It is now shown on the
+  approval screen, because it is the reason the gift-card amount is what it is, and that screen
+  is read aloud before the only irreversible step.

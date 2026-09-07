@@ -17,27 +17,40 @@ const OPEN: &str = include_str!("fixtures/detail_open.html");
 const SHIFTED: &str = include_str!("fixtures/detail_members_shifted.html");
 const SPARSE: &str = include_str!("fixtures/detail_members_sparse.html");
 const ABSENT: &str = include_str!("fixtures/detail_members_absent.html");
+const EMPTY: &str = include_str!("fixtures/detail_members_empty.html");
+const WITH_SELF: &str = include_str!("fixtures/detail_members_with_self.html");
 const LARGE: &str = include_str!("fixtures/detail_members_large.html");
 
 /// Values planted in the fixture's SSN and driver's-licence cells. Nothing this
 /// tool produces may contain them.
 const SENTINELS: &[&str] = &["9999", "SENTINELDLNEVERREAD", "SENTINELNOTE"];
 
+/// Every table this tool can write. Listed once so a new export cannot be added
+/// without the PII assertions below covering it -- which is exactly how
+/// `ASSISTANCE_HEADER` came to be unchecked.
+const ALL_HEADERS: &[&[&str]] = &[
+    export::NEIGHBORS_HEADER,
+    export::REQUESTS_HEADER,
+    export::ASSISTANCE_HEADER,
+    export::MEMBERS_HEADER,
+];
+
 fn members(html: &str) -> Vec<detail::HouseholdMember> {
-    detail::parse(1, html).expect("fixture parses").household_members
+    detail::parse_household_members(&scraper::Html::parse_document(html))
+        .expect("fixture parses")
 }
 
 #[test]
 fn reads_the_household_from_the_family_members_tab() {
     let m = members(OPEN);
-    assert_eq!(m.len(), 4, "four people in the fixture household");
-    assert_eq!(m[0].first_name, "Maria");
-    assert!(m[0].is_self());
+    assert_eq!(m.len(), 3, "three dependants; the neighbour is not a row");
+    assert_eq!(m[0].first_name, "Peter");
+    assert!(!m.iter().any(|p| p.is_self()), "D19: ServWare never lists a Self row");
     assert_eq!(
         m.iter().map(|p| p.age).collect::<Vec<_>>(),
-        vec![Some(41), Some(17), Some(12), Some(8)]
+        vec![Some(17), Some(12), Some(8)]
     );
-    assert_eq!(m[3].relationship, "Daughter");
+    assert_eq!(m[2].relationship, "Daughter");
 }
 
 /// Columns are found by header text. If they were found by position, an upstream
@@ -48,7 +61,7 @@ fn an_inserted_column_does_not_shift_the_age() {
     assert!(SHIFTED.contains("<th>Nickname</th>"), "fixture has the extra column");
     assert_eq!(
         members(SHIFTED).iter().map(|p| p.age).collect::<Vec<_>>(),
-        vec![Some(41), Some(17), Some(12), Some(8)]
+        vec![Some(17), Some(12), Some(8)]
     );
 }
 
@@ -60,12 +73,73 @@ fn an_unrecorded_age_is_absent_rather_than_zero() {
     assert_eq!(m[1].age, None, "a blank cell must not become an age of 0");
 }
 
+/// A household really can have nobody listed: ServWare accepts a head count OR
+/// individual people, and 19 of 158 households in one window had only the count.
+/// That is an answer, and must parse as one.
 #[test]
-fn a_page_without_the_tab_is_empty_rather_than_an_error() {
+fn a_household_recorded_only_as_a_head_count_is_an_empty_roster() {
+    assert!(EMPTY.contains("tabs-familymembers"), "fixture has the tab");
+    assert!(members(EMPTY).is_empty());
+}
+
+/// A page with no tab at all is ServWare having changed shape, which is a
+/// completely different thing -- and it used to be indistinguishable from the
+/// case above.
+///
+/// That mattered: `pull::household_members` derives "this family has nobody
+/// listed" purely from an empty roster, so a renamed tab id would have had the
+/// tool announce, with total confidence, that every household in the conference
+/// has nobody living in it -- a sentence that reads exactly like a correct
+/// answer. See DECISIONS.md D32.
+#[test]
+fn a_page_without_the_tab_is_an_error_not_an_empty_household() {
+    assert!(!ABSENT.contains("tabs-familymembers"));
+    let err = detail::parse_household_members(&scraper::Html::parse_document(ABSENT))
+        .expect_err("a missing tab is a change in ServWare, not an empty family");
+    assert!(format!("{err}").contains("form has changed"), "{err}");
+
+    // The rest of the page is unaffected: this must not break the write path.
     let d = detail::parse(1, ABSENT).expect("the rest of the page still parses");
-    assert!(d.household_members.is_empty());
-    // The form and assistance items are unaffected.
     assert_eq!(d.status(), "Open");
+}
+
+/// Household size is documented as "rows plus one", so the neighbour must never
+/// also be a row. D19 says ServWare does not produce one here, but another
+/// conference might -- and counting that family twice can move them up a
+/// gift-card rung.
+#[test]
+fn a_self_row_is_excluded_so_rows_plus_one_stays_right() {
+    assert!(WITH_SELF.contains("<td>Self</td>"), "fixture plants the row");
+    let m = members(WITH_SELF);
+    assert_eq!(m.len(), 1, "the Self row is dropped");
+    assert_eq!(m[0].first_name, "Ruth");
+    assert!(!m.iter().any(|p| p.is_self()));
+}
+
+/// The columns just past Age are Phone, SSN (Last 4) and Drivers License. If the
+/// header row and the body cells ever stop lining up, reading "age" by index
+/// reads one of those instead -- and `"9999".parse::<u32>()` succeeds, so the
+/// value lands in the CSV and then in the conversation. See DECISIONS.md D40.
+#[test]
+fn a_row_that_does_not_match_the_header_is_refused() {
+    let skewed = OPEN.replacen("<td>Peter</td>", "<td>Peter</td><td>extra</td>", 1);
+    let err = detail::parse_household_members(&scraper::Html::parse_document(&skewed))
+        .expect_err("a row wider than the header must not be read by index");
+    assert!(format!("{err}").contains("form has changed"), "{err}");
+}
+
+/// An age that is not an age means the columns have shifted, and the cell being
+/// read is probably the SSN.
+#[test]
+fn an_implausible_age_is_refused_rather_than_exported() {
+    let ssn_in_the_age_column = OPEN.replacen("<td>17</td>", "<td>9999</td>", 1);
+    let err = detail::parse_household_members(&scraper::Html::parse_document(
+        &ssn_in_the_age_column,
+    ))
+    .expect_err("9999 is not an age");
+    assert!(format!("{err}").contains("form has changed"), "{err}");
+    // And the refusal must not quote the value it refused.
+    assert!(!format!("{err}").contains("9999"), "the error leaked the cell: {err}");
 }
 
 /// The one that matters. The identity columns sit next to the ages in the same
@@ -132,12 +206,7 @@ fn exports_carry_recorded_money_only_never_a_suggested_amount() {
         "suggested", "gift_card", "giftcard", "ladder", "budget",
         "recommend", "allocation", "per_family", "should",
     ];
-    for header in [
-        export::NEIGHBORS_HEADER,
-        export::REQUESTS_HEADER,
-        export::MEMBERS_HEADER,
-        export::ASSISTANCE_HEADER,
-    ] {
+    for header in ALL_HEADERS.iter().copied() {
         for column in header {
             for bad in banned {
                 assert!(!column.contains(bad), "column {column:?} looks policy-derived ({bad:?})");
@@ -161,29 +230,104 @@ fn exports_carry_recorded_money_only_never_a_suggested_amount() {
 
 /// Column sets are pinned so a new ServWare field cannot add a column by
 /// accident. Changing an export's shape should mean editing this list.
+///
+/// **Every header is asserted exactly**, as DECISIONS.md D21 specifies. Only
+/// `MEMBERS_HEADER` used to be; the others were pinned by length plus one
+/// element, which cannot catch a *replaced* column (swap `marital_status` for
+/// `income_level` and the length is still 22). And `ASSISTANCE_HEADER` was left
+/// out of the forbidden-substring loop entirely -- so SSN, date of birth and
+/// case-note columns could be added to the one table that already carries a
+/// first and last name on every row, and the whole suite stayed green. Proven
+/// by doing exactly that. See DECISIONS.md D47.
 #[test]
 fn the_column_allowlist_is_pinned() {
+    assert_eq!(
+        export::NEIGHBORS_HEADER,
+        &[
+            "client_id", "first_name", "last_name", "street_address_line1",
+            "street_address_line2", "city", "state_code", "postal_code", "home_phone",
+            "mobile_phone", "work_phone", "email_address", "primary_language",
+            "marital_status", "parishioner", "homeless", "disabled_client", "veteran",
+            "last_request_date", "household_adult_count", "household_child_count", "age",
+        ]
+    );
+    assert_eq!(
+        export::REQUESTS_HEADER,
+        &[
+            "request_id", "client_id", "first_name", "last_name", "date_requested", "status",
+            "street_address_line1", "city", "home_phone", "mobile_phone",
+            "calculated_adult_count", "calculated_child_count", "calculated_household_count",
+            "assistance_item_count", "assistance_total_dollars",
+        ]
+    );
+    assert_eq!(
+        export::ASSISTANCE_HEADER,
+        &[
+            "request_id", "client_id", "first_name", "last_name", "date_requested",
+            "date_provided", "assistance_type", "monetary_value", "quantity", "pending",
+        ]
+    );
     assert_eq!(
         export::MEMBERS_HEADER,
         &["client_id", "household_last_name", "first_name", "relationship", "age"]
     );
-    assert_eq!(export::NEIGHBORS_HEADER.len(), 22);
-    assert_eq!(export::REQUESTS_HEADER.len(), 15);
-    assert_eq!(export::NEIGHBORS_HEADER[0], "client_id");
-    assert_eq!(export::REQUESTS_HEADER[1], "client_id", "the join key");
 
     // Nothing identity-shaped, and no free text written by a caseworker.
+    // EVERY table, including assistance.
     let forbidden = [
-        "ssn", "drivers_license", "driverslicense", "identification", "birth", "dob",
-        "notes", "alert",
+        "ssn", "social", "drivers_license", "driverslicense", "license", "identification",
+        "identity", "birth", "dob", "notes", "note", "alert", "income", "case_number",
     ];
-    for header in [export::NEIGHBORS_HEADER, export::REQUESTS_HEADER, export::MEMBERS_HEADER] {
+    for header in ALL_HEADERS.iter().copied() {
         for column in header {
             for bad in forbidden {
                 assert!(!column.contains(bad), "column {column:?} looks like {bad:?}");
             }
         }
     }
+}
+
+/// The tables get opened in Excel by design, and ServWare's free-text fields are
+/// typed by caseworkers. A cell beginning `=` is a formula there, not a string.
+#[test]
+fn a_cell_that_looks_like_a_formula_is_neutralised() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = ExportDir::at(tmp.path());
+    let table = export::Table {
+        name: "household-members",
+        header: export::MEMBERS_HEADER,
+        rows: vec![
+            vec![
+                "7".into(),
+                "=HYPERLINK(\"http://x\",\"click\")".into(),
+                "@SUM(A1:A9)".into(),
+                "+SUM(A1:A9)".into(),
+                "8".into(),
+            ],
+            vec!["8".into(), "Okonkwo".into(), "Ruth".into(), "Daughter".into(), "-3".into()],
+        ],
+    };
+    let path = dir.write(&table, list::parse_date("09/06/2026").unwrap()).unwrap();
+    let body = std::fs::read_to_string(&path).unwrap();
+
+    for live in ["=HYPERLINK", "@SUM"] {
+        assert!(
+            !body.contains(&format!(",{live}")) && !body.lines().any(|l| l.starts_with(live)),
+            "{live} reached the file as a live formula:\n{body}"
+        );
+    }
+    assert!(body.contains("'=HYPERLINK"), "should be quoted as text:\n{body}");
+    assert!(body.contains("'@SUM"), "should be quoted as text:\n{body}");
+    assert!(body.contains("'+SUM"), "a non-numeric leading + is still defused:\n{body}");
+    // Numbers are left alone, so amounts still sum in a spreadsheet. `-3` and
+    // `+1` are values, not formulas: a spreadsheet renders them as numbers, and
+    // quoting them would turn a column of money into a column of text.
+    assert!(body.contains(",-3"), "a negative number must stay a number:\n{body}");
+    assert_eq!(
+        export::defuse_for_test("+1"),
+        "+1",
+        "a signed number is a number, not a formula"
+    );
 }
 
 /// Dates of birth are read but never emitted: the age column is derived, and
@@ -307,7 +451,7 @@ fn a_second_export_on_the_same_day_does_not_overwrite_the_first() {
 
     let body = std::fs::read_to_string(&first).unwrap();
     assert!(body.starts_with("client_id,household_last_name,first_name,relationship,age\n"));
-    assert_eq!(body.lines().count(), 5, "header plus four people");
+    assert_eq!(body.lines().count(), 4, "header plus the household's three dependants");
 }
 
 #[cfg(unix)]

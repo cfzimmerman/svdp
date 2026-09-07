@@ -1,6 +1,5 @@
 //! The submit engine: idempotent, resumable, and never silently lossy.
 
-use crate::domain::policy::ConferenceConfig;
 use crate::domain::policy::Slot;
 use crate::domain::session::DeliverySession;
 use crate::domain::session::SessionState;
@@ -28,7 +27,6 @@ pub trait DeliveryBackend {
         request_id: u64,
         volunteer_id: &str,
         date: &str,
-        expected_version: Option<u64>,
     ) -> impl std::future::Future<Output = Result<WriteOutcome, ServWareError>> + Send;
 }
 
@@ -57,7 +55,6 @@ impl SubmitReport {
 pub async fn submit<B: DeliveryBackend>(
     backend: &B,
     session: &mut DeliverySession,
-    config: &ConferenceConfig,
     now: &str,
 ) -> Result<SubmitReport, String> {
     if !matches!(
@@ -81,14 +78,7 @@ pub async fn submit<B: DeliveryBackend>(
             for slot in delivery.pending_slots() {
                 let result = match slot {
                     Slot::Complete => {
-                        backend
-                            .ensure_complete(
-                                delivery.request_id,
-                                &volunteer,
-                                &date,
-                                delivery.version,
-                            )
-                            .await
+                        backend.ensure_complete(delivery.request_id, &volunteer, &date).await
                     }
                     Slot::Food => {
                         backend
@@ -157,7 +147,6 @@ pub async fn submit<B: DeliveryBackend>(
         }
     }
 
-    let _ = config;
     session.recompute_state();
     Ok(report)
 }

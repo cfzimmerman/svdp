@@ -8,7 +8,11 @@
 gift_card_ladder = [50, 60, 70, 80, 90, 100]  # by household size; first = floor, last = ceiling
 visit_mileage = "5"
 visit_notes_html = "<p>Delivered food and gift cards</p>"
-tag_assistance_notes = true
+
+# The largest amount this tool will record in a single assistance item. Not a
+# policy figure -- it is a backstop, because ServWare cannot delete an item once
+# it is written. Anything genuinely larger is entered on the website by hand.
+max_item_dollars = 500
 
 # Families receive one delivery a month, so a household delivered to within this
 # many days is held back from the working list by default.

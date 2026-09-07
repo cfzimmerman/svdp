@@ -15,12 +15,24 @@ pub struct ConferenceConfig {
     pub gift_card: AssistanceType,
     /// Gift card dollars by household size, index 0 == household of 0 or 1.
     /// The last entry applies to every larger household.
+    ///
+    /// Rejected at parse time if empty. It used to be guarded by a
+    /// `debug_assert!`, which is compiled out of the `--release` binary that
+    /// ships -- so an external `conference.toml` with `gift_card_ladder = []`
+    /// parsed happily and `gift_card_dollars` fell through to **$0 for every
+    /// family**, silently. See DECISIONS.md D34.
+    #[serde(deserialize_with = "non_empty_ladder")]
     pub gift_card_ladder: Vec<u32>,
     pub visit_mileage: String,
     pub visit_notes_html: String,
-    /// Write a machine tag into each assistance item's notes so a retry can
-    /// recognise its own work. See DECISIONS.md D7.
-    pub tag_assistance_notes: bool,
+    /// The largest amount that may be recorded in a single assistance item.
+    ///
+    /// Not a policy figure -- the volunteer's number always wins within it. It
+    /// is a bound on what can reach ServWare at all, because nothing else stood
+    /// between a mistyped or hallucinated figure and money in the county's books
+    /// that cannot be taken back out. See DECISIONS.md D36.
+    #[serde(default = "default_max_item_dollars")]
+    pub max_item_dollars: u32,
     /// A household delivered to within this many days is held back from the
     /// working list by default. See DECISIONS.md D29.
     #[serde(default = "default_delivery_interval_days")]
@@ -79,13 +91,13 @@ impl ConferenceConfig {
     /// Monotonic and clamped: the ladder's first entry is the floor ($50) and
     /// its last is the ceiling ($100).
     pub fn gift_card_dollars(&self, size: u32) -> u32 {
-        debug_assert!(!self.gift_card_ladder.is_empty(), "ladder must not be empty");
         let index = size.saturating_sub(1) as usize;
-        *self
-            .gift_card_ladder
+        let ladder = &self.gift_card_ladder;
+        *ladder
             .get(index)
-            .or_else(|| self.gift_card_ladder.last())
-            .unwrap_or(&0)
+            // Non-empty is a parse-time invariant, so `last()` is always Some
+            // and there is no "no amount" case left to invent a number for.
+            .unwrap_or_else(|| ladder.last().expect("ladder is non-empty by construction"))
     }
 
     /// The machine tag for one write slot of one session.
@@ -95,10 +107,12 @@ impl ConferenceConfig {
 
     /// Notes text for an assistance item: machine tag first, then something a
     /// caseworker reading ServWare can understand.
+    ///
+    /// Always tagged. This used to be switchable with `tag_assistance_notes`,
+    /// whose `false` arm was a second, weaker idempotency scheme keyed on
+    /// `(kind, date)` -- the key DECISIONS.md D7 rejects as unsound -- that no
+    /// shipped config ever selected. See DECISIONS.md D35.
     pub fn item_notes(&self, session: &str, slot: Slot, date: &str) -> String {
-        if !self.tag_assistance_notes {
-            return String::new();
-        }
         format!("{} — SVdP delivery {date}", self.tag(session, slot))
     }
 }
@@ -107,6 +121,30 @@ impl ConferenceConfig {
 /// `conference.toml` without the field still loads.
 fn default_delivery_interval_days() -> u32 {
     28
+}
+
+fn default_max_item_dollars() -> u32 {
+    500
+}
+
+/// Reject an empty gift-card ladder while it is still just text on disk.
+///
+/// Validating here rather than at the call site means an invalid override is
+/// caught by the existing "ignoring malformed conference config" path and the
+/// reviewed, embedded policy is used instead -- so no code downstream has to
+/// have an opinion about what to pay a family when the ladder is missing.
+fn non_empty_ladder<'de, D>(d: D) -> std::result::Result<Vec<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let ladder = Vec::<u32>::deserialize(d)?;
+    if ladder.is_empty() {
+        return Err(D::Error::custom(
+            "gift_card_ladder must have at least one amount",
+        ));
+    }
+    Ok(ladder)
 }
 
 /// Whether a household delivered to on `last` is still inside the once-a-month

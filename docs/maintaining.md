@@ -130,6 +130,13 @@ svdp snapshot                   # save one page locally, to work offline
 svdp snapshot --path /app/...   # capture any page, for protocol spikes
 ```
 
+`requests` and `volunteers` shorten names to "Ada L." by default; pass `--full-names` when you
+genuinely need them. This output lands in terminals, scrollback and agent transcripts.
+
+`snapshot` asks `git check-ignore` about its destination and **refuses to write** if git does not
+ignore it. `--out` is relative to your working directory while `.gitignore` anchors `/recordings/`
+at the repository root, so the two disagree more often than you would expect.
+
 Data pulls, which write CSVs to the Desktop unless you pass `--out`:
 
 ```bash
@@ -172,7 +179,13 @@ This repository is public and the data concerns families receiving assistance.
   real data. Field *names* are protocol facts and safe; every *value* is invented.
 - **Export columns are an allowlist pinned by a test.** No SSN, no driver's licence, no case notes,
   and no dates of birth — exports carry ages instead, so a spreadsheet passed between volunteers
-  never holds name + address + DOB.
+  never holds name + address + DOB. Every header is asserted as an exact literal: a length check
+  cannot catch a *replaced* column, and for a while the assistance table was not checked at all.
+- **CSV cells that look like formulas are quoted.** These files get opened in Excel, and ServWare's
+  free-text fields are typed by caseworkers.
+- **CI's fixture check is by provenance.** It re-runs `scripts/gen-fixtures.py` and fails if the
+  tree differs, so a real capture cannot be committed as a fixture. Regenerate whenever you change
+  that script, or CI will fail on a diff you did not mean to make.
 - Real captures are validated by an **opt-in local test** that reads a path from
   `SVDP_LOCAL_DETAIL_HTML` and prints structure only:
 
@@ -194,8 +207,9 @@ Honest list, current as of the last change:
 - **The delivery chain has never run end to end through MCP.** `update_session_plan → confirm_plan
   → submit_session` compiles and exposes correctly, and one live write has been verified — but
   through the CLI. This is the half that spends money.
-- **CI has never run.** The workflows are written and their verification steps have been executed
-  locally, but no tag has been pushed and no `workflow_dispatch` run has happened.
+- **CI had never run** until September 2026: `on: push: branches:` listed `claude-rewrite` while
+  the working branch was `feature/claude-rewrite`, so nothing matched. Now `['**']`. Its steps have
+  been executed locally and pass; no tag has been pushed and no release run has happened.
 - **The universal Mac build's x86_64 slice has never been compiled.** The risk sits with
   `aws-lc-rs`, which builds C and assembly; macOS x86_64 is a first-class target for it, so this is
   expected to work rather than known to.
@@ -205,6 +219,9 @@ Honest list, current as of the last change:
   paced, but the one fan-out not behind an approval dialog.
 - **Skill distribution does not scale.** A zip per volunteer is fine for a handful of people and
   nothing more.
+- **`WriteUnverifiable` has never fired in practice.** It is the path taken when a write may have
+  landed but cannot be confirmed, and it tells the volunteer not to retry. The logic is tested; the
+  situation has not occurred.
 
 ## Where the reasoning lives
 

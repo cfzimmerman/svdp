@@ -30,13 +30,26 @@ pub enum ServWareError {
 
     /// A write was accepted at the HTTP level but did not take effect. Spring
     /// re-renders a rejected form as 200, so status codes cannot be trusted;
-    /// this is raised by read-back verification.
+    /// this is raised by read-back verification, and read-back proved the record
+    /// is unchanged.
     #[error("ServWare did not accept the change to request {request_id} ({what}). Nothing was written.")]
     WriteRejected { request_id: u64, what: String },
 
-    /// Someone else changed the request between planning and submission.
-    #[error("request {request_id} changed in ServWare since it was planned ({detail})")]
-    Conflict { request_id: u64, detail: String },
+    /// A write may have landed but could not be confirmed as the right one --
+    /// the item count grew without our tag appearing, or the amount or type read
+    /// back wrong.
+    ///
+    /// **Categorically different from `WriteRejected`**, and the distinction is
+    /// the whole point: ServWare cannot delete an assistance item, so telling
+    /// somebody "nothing was written" when something was is what turns one $70
+    /// entry into three. This says the opposite, and says not to retry.
+    #[error("a change to request {request_id} ({what}) was sent but could not be confirmed")]
+    WriteUnverifiable { request_id: u64, what: String },
+
+    /// An amount outside what the conference has said it ever gives. Refused
+    /// before it is sent, because it cannot be taken back afterwards.
+    #[error("${dollars} is more than the most this tool will record in one entry (${max})")]
+    AmountRefused { dollars: u32, max: u32 },
 
     #[error("could not read ServWare's response: {0}")]
     Malformed(String),
@@ -56,6 +69,13 @@ impl From<FormError> for ServWareError {
     fn from(e: FormError) -> Self {
         match e {
             FormError::UnknownField(field) => Self::FormChanged { field },
+            FormError::UnknownValue { name, .. } => Self::FormChanged { field: name },
+            // The page's shape changed under us in a way that makes extraction
+            // untrustworthy, which is the same class of problem as a renamed
+            // field and needs the same "this tool needs an update" answer.
+            FormError::NestedForms { .. } => Self::FormChanged {
+                field: "the page now nests forms".into(),
+            },
             other => Self::Malformed(other.to_string()),
         }
     }
@@ -88,9 +108,20 @@ impl ServWareError {
             Self::WriteRejected { what, .. } => {
                 format!("ServWare would not accept the {what}. Nothing was written.")
             }
-            Self::Conflict { detail, .. } => {
-                format!("Someone changed this request in ServWare since you planned it: {detail}")
-            }
+            // Deliberately does not say "nothing was written", and deliberately
+            // says not to try again: something probably did reach ServWare, and
+            // a retry would record it a second time with no way to undo it.
+            Self::WriteUnverifiable { request_id, what } => format!(
+                "The {what} was sent to ServWare, but this tool could not confirm it was \
+                 recorded correctly. Something may well have been saved, so please do NOT \
+                 try again -- open request {request_id} on the ServWare website and check \
+                 what is there before doing anything else."
+            ),
+            Self::AmountRefused { dollars, max } => format!(
+                "${dollars} is larger than the biggest single amount this tool will record \
+                 (${max}), so nothing was written. If that amount is really right, it needs \
+                 to be entered on the ServWare website by hand."
+            ),
             Self::NotFound(id) => format!("Request {id} is no longer in ServWare."),
             Self::Malformed(_) => {
                 "ServWare sent back something this tool did not understand. \

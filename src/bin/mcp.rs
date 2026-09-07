@@ -36,7 +36,6 @@ use svdp::domain::pull;
 use svdp::domain::recency::DeliveryRecency;
 use svdp::domain::recency::HISTORY_LOOKBACK_DAYS;
 use svdp::domain::session::Delivery;
-use svdp::domain::session::DeliveryOutcome;
 use svdp::domain::session::DeliverySession;
 use svdp::domain::session::Group;
 use svdp::domain::session::SessionState;
@@ -233,31 +232,35 @@ impl Svdp {
         // Reading the list is also the schema check: required fields that went
         // missing surface here as a parse failure rather than as wrong money.
         match list::fetch_all(&self.client, StatusFilter::Open).await {
-            Ok(requests) => {
-                lines.push(format!("Read {} open requests.", requests.len()));
-                if let Some(first) = requests.first() {
-                    match detail::fetch(&self.client, first.id).await {
-                        Ok(d) => {
-                            lines.push(format!(
-                                "Read a request page: {} volunteers, {} assistance items.",
-                                d.members.len(),
-                                d.assistance_items.len()
-                            ));
-                            for marker in ["status", "visitCompleted", "visitAssignedToMemberId"] {
-                                if !d.form.contains(marker) {
-                                    lines.push(format!(
-                                        "PROBLEM: ServWare's form no longer has `{marker}`. \
-                                         This tool needs an update before it writes anything."
-                                    ));
-                                }
-                            }
-                        }
-                        Err(e) => return Ok(fail(&e)),
-                    }
-                } else {
-                    lines.push("No open requests right now.".into());
-                }
-            }
+            Ok(requests) => lines.push(format!("Read {} open requests.", requests.len())),
+            Err(e) => return Ok(fail(&e)),
+        }
+
+        // Any status, not just Open. On a quiet week there is nothing open, and
+        // this check used to say "No open requests right now" and report itself
+        // healthy having verified no part of the form at all -- so a ServWare
+        // release that renamed a field would surface mid-submission, after money
+        // had been logged. See DECISIONS.md D33.
+        match list::fetch_all(&self.client, StatusFilter::Any).await {
+            Ok(any) => match any.first() {
+                None => lines.push(
+                    "ServWare has no requests at all, so the form could not be checked."
+                        .to_string(),
+                ),
+                Some(first) => match detail::fetch(&self.client, first.id).await {
+                    // `detail::fetch` requires every field the completion write
+                    // touches, so success here IS the check -- there is no
+                    // shorter list of markers that can disagree with the write.
+                    Ok(d) => lines.push(format!(
+                        "Checked a request page: all {} fields this tool writes to are \
+                         present, {} volunteers, {} assistance items.",
+                        svdp::servware::write::COMPLETION_FIELDS.len(),
+                        d.members.len(),
+                        d.assistance_items.len()
+                    )),
+                    Err(e) => return Ok(fail(&e)),
+                },
+            },
             Err(e) => return Ok(fail(&e)),
         }
 
@@ -289,16 +292,24 @@ impl Svdp {
         // result says the check could not run. A short list that quietly omitted
         // families would be worse than a long one.
         let from = today - chrono::Duration::days(HISTORY_LOOKBACK_DAYS);
-        let (recency, history_failed) = match list::fetch_window(
-            &self.client,
-            StatusFilter::Any,
-            Some(from),
-            Some(today),
-            list::WINDOW_MAX_PAGES,
-        )
-        .await
+        let (recency, history_failed) =
+            match list::fetch_window(&self.client, StatusFilter::Any, Some(from), Some(today))
+                .await
         {
-            Ok(history) => (Some(DeliveryRecency::from_history(&history)), false),
+            // An `Ok` carrying no delivery dates at all is not evidence that
+            // nobody has been delivered to -- it is what a renamed
+            // `dateProvided` looks like. Treated as "could not check", because
+            // the alternative is telling the person planning tonight's route
+            // that everyone is due. See DECISIONS.md D43.
+            Ok(history) => {
+                let recency = DeliveryRecency::from_history(&history);
+                if recency.is_empty() && !history.is_empty() {
+                    tracing::warn!("delivery history carried no usable dates");
+                    (None, true)
+                } else {
+                    (Some(recency), false)
+                }
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "could not read delivery history");
                 (None, true)
@@ -376,8 +387,9 @@ impl Svdp {
             Err(e) => return Ok(fail(&e)),
         };
         let Some(first) = requests.first() else {
-            return Ok(ok("There are no open requests, so the volunteer list \
-                          cannot be read right now."));
+            return Ok(ok(
+                "There are no open requests, so the volunteer list cannot be read right now.",
+            ));
         };
         match detail::fetch(&self.client, first.id).await {
             Ok(d) => {
@@ -450,19 +462,33 @@ impl Svdp {
             Ok(w) => w,
             Err(msg) => return Ok(complain(msg)),
         };
-        let budget = list::WINDOW_MAX_PAGES;
-        let rows =
-            match list::fetch_window(&self.client, StatusFilter::Any, from, to, budget).await {
-                Ok(r) => r,
-                Err(e) => return Ok(fail(&e)),
-            };
+        let rows = match list::fetch_window(&self.client, StatusFilter::Any, from, to).await {
+            Ok(r) => r,
+            Err(e) => return Ok(fail(&e)),
+        };
         // Two grains from one pull: a request may carry several items given on
         // different days, and "what did they receive, and when" needs the finer
         // one. The date range filters on when families asked; `date_provided`
         // in the assistance file says when help arrived.
+        //
+        // An item with no amount now exports as a blank cell rather than as
+        // "0.00" (see DECISIONS.md D43). Blanks are normal in ones and twos; if
+        // EVERY item has one, the field has most likely been renamed and no
+        // total from this file means anything. Said out loud rather than
+        // guessed at, because these totals get reported to a conference.
+        let items: usize = rows.iter().map(|r| r.assistance_items.len()).sum();
+        let without: usize = rows.iter().map(|r| r.items_without_value()).sum();
+        let note = (items > 0 && without == items).then(|| {
+            format!(
+                "WARNING: none of the {items} items in this pull carries a dollar amount. \
+                 That is not normal, and it probably means ServWare has changed the field \
+                 this tool reads. Tell the volunteer the money columns cannot be trusted \
+                 and do not total them."
+            )
+        });
         Ok(save_all(
             &[export::requests_table(&rows), export::assistance_table(&rows)],
-            None,
+            note,
         ))
     }
 
@@ -517,6 +543,19 @@ impl Svdp {
                 stats.without_members
             ));
         }
+        // A page that could not be read is a family missing from the answer, and
+        // an Adopt-a-Family list that quietly omits a family is the failure this
+        // whole pull exists to prevent. One bad page used to abort the entire
+        // run; now it is skipped and named. See DECISIONS.md D45.
+        if !stats.unreadable.is_empty() {
+            note.push_str(&format!(
+                "\nIMPORTANT: {} household page(s) could not be read, so those families are \
+                 NOT in this spreadsheet at all: request numbers {:?}. Any count or list \
+                 from this file is missing them. Say so, and offer to try those again.",
+                stats.unreadable.len(),
+                stats.unreadable
+            ));
+        }
         Ok(save(&export::members_table(&rosters), Some(note)))
     }
 
@@ -558,13 +597,24 @@ impl Svdp {
     ) -> Result<CallToolResult, ErrorData> {
         // Refuse to re-plan a delivery that has already sent money: the audit
         // trail of what reached ServWare must not be overwritten.
-        if let Ok(Some(existing)) = self.store.current()
-            && existing.has_written() {
+        //
+        // An `Err` here is NOT "no session". A receipt that exists but cannot be
+        // parsed used to fall through to `_ => DeliverySession::new(..)` below,
+        // silently starting a fresh session -- with a fresh id, so every
+        // idempotency tag matched nothing already in ServWare and a three-family
+        // night was logged twice. See DECISIONS.md D39.
+        match self.store.current() {
+            Ok(Some(existing)) if existing.has_written() => {
                 return Ok(ok(format!(
-                    "A delivery recorded on {} is still part-way through being saved. \n                     Check on it with get_session (id {}) and finish or abandon it \n                     before starting another.",
+                    "A delivery recorded on {} is still part-way through being saved. \
+                     Check on it with get_session (id {}) and finish or abandon it \
+                     before starting another.",
                     existing.delivery_date, existing.id
                 )));
             }
+            Err(e) => return Ok(complain(e.to_string())),
+            _ => {}
+        }
 
         let open = match list::fetch_all(&self.client, StatusFilter::Open).await {
             Ok(r) => r,
@@ -582,10 +632,8 @@ impl Svdp {
                 existing.delivery_date = date.clone();
                 existing
             }
-            _ => DeliverySession::new(
-                date.clone(),
-                chrono::Local::now().to_rfc3339(),
-            ),
+            Ok(None) => DeliverySession::new(date.clone(), chrono::Local::now().to_rfc3339()),
+            Err(e) => return Ok(complain(e.to_string())),
         };
 
         let mut seen: Vec<u64> = Vec::new();
@@ -595,13 +643,15 @@ impl Svdp {
             for d in g.deliveries {
                 let Some(r) = open.iter().find(|r| r.id == d.request_id) else {
                     return Ok(ok(format!(
-                        "Request {} is not in the list of open requests. It may already \n                         have been recorded. Run list_open_requests and try again.",
+                        "Request {} is not in the list of open requests. It may already \
+                         have been recorded. Run list_open_requests and try again.",
                         d.request_id
                     )));
                 };
                 if seen.contains(&d.request_id) {
                     return Ok(ok(format!(
-                        "{} appears in more than one volunteer group. Each family \n                         belongs to exactly one group -- which one delivered to them?",
+                        "{} appears in more than one volunteer group. Each family \
+                         belongs to exactly one group -- which one delivered to them?",
                         r.display_name()
                     )));
                 }
@@ -617,8 +667,6 @@ impl Svdp {
                     food_dollars: d
                         .food_dollars
                         .unwrap_or_else(|| self.config.second_harvest.value.unwrap_or(70)),
-                    version: Some(r.version),
-                    outcome: DeliveryOutcome::Delivered,
                     food: SlotState::Pending,
                     gift_card: SlotState::Pending,
                     complete: SlotState::Pending,
@@ -632,7 +680,7 @@ impl Svdp {
         }
 
         if groups.iter().all(|g| g.deliveries.is_empty()) {
-            return Ok(ok("No deliveries in the plan yet. Which families were \n                          delivered to today?"));
+            return Ok(ok("No deliveries in the plan yet. Which families were delivered to today?"));
         }
         session.groups = groups;
         if let Err(e) = self.store.save(&session) {
@@ -640,7 +688,7 @@ impl Svdp {
         }
         Ok(ok(format!(
             "{}\n\nIf that is right, confirm it with session id {} and revision {}.",
-            render_plan(&session, &self.config),
+            render_plan(&session),
             session.id,
             session.revision
         )))
@@ -659,10 +707,11 @@ impl Svdp {
         };
         if session.revision != p.revision {
             return Ok(ok(format!(
-                "The plan changed after that version (you have {}, it is now {}). \n                 Show the volunteer this plan and confirm again:\n\n{}",
+                "The plan changed after that version (you have {}, it is now {}). \
+                 Show the volunteer this plan and confirm again:\n\n{}",
                 p.revision,
                 session.revision,
-                render_plan(&session, &self.config)
+                render_plan(&session)
             )));
         }
         session.state = SessionState::Confirmed;
@@ -689,7 +738,7 @@ impl Svdp {
         let backend = ServWareBackend { client: &self.client, config: &self.config };
         let now = chrono::Local::now().to_rfc3339();
 
-        let report = match submit(&backend, &mut session, &self.config, &now).await {
+        let report = match submit(&backend, &mut session, &now).await {
             Ok(r) => r,
             Err(why) => return Ok(ok(why)),
         };
@@ -717,7 +766,9 @@ impl Svdp {
             out.extend(report.attention.iter().map(|a| format!("  - {a}")));
             out.push(String::new());
             out.push(
-                "Nothing was lost and nothing was recorded twice. Running                  submit_session again will pick up only what is missing."
+                "Nothing above was recorded twice. Re-running submit_session picks up only \
+                 what is missing -- EXCEPT for anything described as \"could not confirm\", \
+                 which must be checked on the ServWare website first."
                     .into(),
             );
         }
@@ -730,7 +781,7 @@ impl Svdp {
         match self.store.current() {
             Ok(Some(s)) => Ok(ok(format!(
                 "{}\n\nStatus: {:?}. Session id {}, revision {}.",
-                render_plan(&s, &self.config),
+                render_plan(&s),
                 s.state,
                 s.id,
                 s.revision
@@ -752,15 +803,29 @@ impl Svdp {
         };
         if session.has_written() {
             return Ok(ok(
-                "Part of this delivery is already saved in ServWare, so it cannot be \n                 discarded here. Finish saving it, or correct it in the ServWare website."
+                "Part of this delivery is already saved in ServWare, so it cannot be \
+                 discarded here. Finish saving it, or correct it in the ServWare website."
                     .to_string(),
             ));
         }
+        // A session where every write FAILED reaches here, and must: it used to
+        // be refused as "already saved in ServWare" when nothing had been saved,
+        // while re-planning was refused as "finish or abandon it first" -- each
+        // refusal pointing at the other, with no way out for an audience that has
+        // no command line. See DECISIONS.md D38.
+        let attempted = session.has_attempted();
         session.state = SessionState::Abandoned;
         if let Err(e) = self.store.save(&session) {
             return Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())]));
         }
-        Ok(ok("Discarded. Nothing was saved to ServWare."))
+        Ok(ok(if attempted {
+            "Discarded. Nothing reached ServWare -- every entry that was tried failed before \
+             it was saved -- so there is nothing to undo. If you would rather be certain, \
+             the requests are still open on the ServWare website and will show nothing \
+             logged against them."
+        } else {
+            "Discarded. Nothing was saved to ServWare."
+        }))
     }
 }
 
@@ -837,7 +902,7 @@ fn render_table(views: &[OpenRequestView]) -> String {
 /// This is what gets read aloud before the only irreversible step, so it is
 /// deliberately plain -- and it shows the food amount explicitly so the standard
 /// $70 is never a surprise.
-fn render_plan(session: &DeliverySession, _config: &ConferenceConfig) -> String {
+fn render_plan(session: &DeliverySession) -> String {
     let mut out = format!("Delivery on {}:\n", session.delivery_date);
     for group in &session.groups {
         if group.deliveries.is_empty() {
@@ -854,9 +919,12 @@ fn render_plan(session: &DeliverySession, _config: &ConferenceConfig) -> String 
                 }
                 _ => "",
             };
+            // Household size is shown because it is the reason the gift card
+            // is the amount it is, and this is the screen that gets read aloud
+            // before the only irreversible step.
             out.push_str(&format!(
-                "  {} — ${} in gift cards, ${} of food{}\n",
-                d.name, d.gift_card_dollars, d.food_dollars, status
+                "  {} (household of {}) — ${} in gift cards, ${} of food{}\n",
+                d.name, d.household_size, d.gift_card_dollars, d.food_dollars, status
             ));
         }
     }
@@ -961,7 +1029,9 @@ impl Svdp {
     async fn record_deliveries_prompt(&self) -> Result<Vec<PromptMessage>, ErrorData> {
         Ok(vec![PromptMessage::new_text(
             rmcp::model::Role::User,
-            "I did SVdP deliveries today and need to record them in ServWare.              Please start by checking that ServWare is reachable, then show me              the families who are waiting so I can say which ones we delivered to.",
+            "I did SVdP deliveries today and need to record them in ServWare. \
+             Please start by checking that ServWare is reachable, then show me \
+             the families who are waiting so I can say which ones we delivered to.",
         )])
     }
 
@@ -970,7 +1040,8 @@ impl Svdp {
     async fn who_is_waiting_prompt(&self) -> Result<Vec<PromptMessage>, ErrorData> {
         Ok(vec![PromptMessage::new_text(
             rmcp::model::Role::User,
-            "Show me the SVdP families with open requests, longest waiting first,              with the gift card amount each household size calls for.",
+            "Show me the SVdP families with open requests, longest waiting first, \
+             with the gift card amount each household size calls for.",
         )])
     }
 
@@ -990,7 +1061,8 @@ impl Svdp {
     async fn finish_saving_prompt(&self) -> Result<Vec<PromptMessage>, ErrorData> {
         Ok(vec![PromptMessage::new_text(
             rmcp::model::Role::User,
-            "Check whether there is an SVdP delivery that was not finished being              saved to ServWare, and if so, tell me what is left and offer to finish it.",
+            "Check whether there is an SVdP delivery that was not finished being \
+             saved to ServWare, and if so, tell me what is left and offer to finish it.",
         )])
     }
 }
