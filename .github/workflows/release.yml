@@ -39,11 +39,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # No toolchain action: `rust-toolchain.toml` pins the version, and rustup
-      # installs it on first use. One source of truth, so a green clippy run on a
-      # laptop means the same thing as a green clippy run here.
-      - run: rustup show
-        with:
-          targets: ${{ matrix.targets }}
+      # installs it on first use. One source of truth, so a green build here is
+      # the same build as on a laptop.
+      #
+      # The cross-compilation targets have to be added explicitly now that the
+      # action is not doing it. `matrix.targets` is comma-separated because a
+      # universal macOS bundle needs both Apple architectures (DECISIONS.md D30).
+      - name: install the pinned toolchain and its targets
+        run: |
+          rustup show
+          echo "${{ matrix.targets }}" | tr ',' '\n' | while read -r t; do
+            [ -n "$t" ] || continue
+            echo "adding target $t"
+            rustup target add "$t"
+          done
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}

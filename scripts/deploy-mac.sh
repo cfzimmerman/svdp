@@ -48,15 +48,7 @@ test -f dist/svdp-servware.zip
 # remote-login daemon has Full Disk Access, and that can lapse across a reboot.
 # Landing the files somewhere reachable matters more than landing them on the
 # Desktop, so fall back rather than failing a build that already succeeded.
-DEST="$HOME/Desktop"
-if ! ls "$DEST" >/dev/null 2>&1; then
-  DEST="$HOME/svdp-install"
-  mkdir -p "$DEST"
-  echo "!! ~/Desktop is not reachable over SSH (macOS Full Disk Access)."
-  echo "!! Putting the files in $DEST instead."
-  echo "!! To use the Desktop: System Settings > Privacy & Security >"
-  echo "!! Full Disk Access, and enable it for sshd (or Remote Login)."
-fi
+DEST="$HOME/svdp-install"
 
 # Retire artifacts from earlier naming schemes. This project has twice been
 # bitten by a stale artifact sitting next to a fresh one; the destination needs
