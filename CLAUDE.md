@@ -197,6 +197,22 @@ SVDP_LOCAL_DETAIL_HTML=/path/detail.html cargo test --test local_capture -- --ig
 Credentials come from `SERVWARE_USER` / `SERVWARE_PASS` (env, or `.env`). The `.mcpb` supplies
 them from its `user_config`.
 
+## Documentation
+
+Written for four audiences; keep them in their lanes.
+
+- `docs/for-volunteers.md` — the user guide, and what the extension's `documentation` link points
+  at. Plain words, no jargon, no repository paths.
+- `docs/maintaining.md` — build, release, deploy, the CLI, production-safety and PII rules, and an
+  honest list of what is unverified.
+- `DECISIONS.md` — why it is shaped this way, including rejected alternatives.
+- `api.md` — the reverse-engineered ServWare protocol.
+
+`START-HERE.txt`, generated into the release archive by `scripts/build-release.sh`, is the
+**primary** setup document for a volunteer. Anything a volunteer must do belongs there first;
+`docs/for-volunteers.md` is the longer version of the same thing. The root `README.md` is
+deliberately a stub for the maintainer's own note — do not move documentation back into it.
+
 ## Reference
 
 `api.md` is the reverse-engineered ServWare API reference. It is **partly abridged** — its

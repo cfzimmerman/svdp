@@ -823,3 +823,33 @@ to work rather than known to. `workflow_dispatch` is enabled on the release work
 proven without cutting a tag.
 
 Also worth recording, since it came up: **there is no macOS 16.** Apple renumbered from 15 to 26.
+
+## D31. Documentation moved out of the README, split by audience
+
+*September 2026*
+
+The README had accumulated four audiences in one file: volunteer setup, volunteer usage,
+maintainer build-and-release notes, and project background. Cory asked for it to become a stub so
+he could write a note to the next human maintainer there.
+
+Documentation now lives in `docs/`, split by who reads it:
+
+| Document | Audience |
+|---|---|
+| `docs/for-volunteers.md` | volunteers — plain words, no repository paths |
+| `docs/maintaining.md` | whoever looks after the code |
+| `docs/README.md` | an index, so `docs/` is navigable when the root README is a stub |
+| `DECISIONS.md`, `api.md`, `CLAUDE.md` | unchanged, and left at the root where everything links to them |
+
+`docs/for-volunteers.md` kept its path deliberately: the manifest's `documentation` field points
+at it, and moving it would break the link shown in Claude Desktop's extension settings.
+
+**The primary setup document is still `START-HERE.txt` inside the release archive**, not anything
+in `docs/`. A volunteer reads what they were handed; `docs/for-volunteers.md` is the longer version
+for anyone who goes looking. `CLAUDE.md` now says so, along with a note not to move documentation
+back into the README.
+
+`docs/maintaining.md` carries a **Known gaps** section — what has never been run, and what is
+expected to work rather than known to. That belongs in the maintainer's guide rather than only in
+a conversation, because it is the first thing a new maintainer needs and the last thing anyone
+thinks to write down.
