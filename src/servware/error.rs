@@ -7,6 +7,11 @@ use crate::servware::form::FormError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServWareError {
+    /// The extension was installed but its username and password boxes are empty.
+    /// Distinct from `LoginFailed`: nothing was rejected, nothing was tried.
+    #[error("the ServWare username and password have not been filled in")]
+    NotConfigured,
+
     #[error("ServWare rejected the sign-in (check the username and password)")]
     LoginFailed,
 
@@ -67,8 +72,12 @@ impl ServWareError {
     /// Never surfaces a serde offset or an HTTP status; those are for the log.
     pub fn user_message(&self) -> String {
         match self {
+            Self::NotConfigured => SETUP_INSTRUCTIONS.into(),
             Self::LoginFailed => {
-                "ServWare would not accept that username and password.".into()
+                "ServWare would not accept that username and password. Open Claude's \
+                 Settings, go to Extensions, open SVdP ServWare, and check what is typed \
+                 in the two boxes."
+                    .into()
             }
             Self::SessionExpired => "ServWare signed you out. Signing back in.".into(),
             Self::FormChanged { .. } => {
@@ -97,5 +106,20 @@ impl ServWareError {
         }
     }
 }
+
+/// Said the same way everywhere, because this is the first thing a volunteer
+/// hits and the only place they can fix it. No jargon, no log file, no file path.
+pub const SETUP_INSTRUCTIONS: &str = "\
+This needs your ServWare username and password before it can do anything, and they \
+have not been filled in yet.\n\n\
+To add them:\n\
+1. Open Claude's Settings (the gear icon).\n\
+2. Click Extensions.\n\
+3. Click SVdP ServWare.\n\
+4. Type your ServWare username and password into the two boxes.\n\
+5. Make sure the switch next to it is turned on.\n\n\
+These are the same username and password you use on servware.org. Your conference \
+president issues them. They are stored by your own computer and never appear in this \
+conversation.";
 
 pub type Result<T> = std::result::Result<T, ServWareError>;

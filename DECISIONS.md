@@ -582,3 +582,152 @@ understand. Nothing was written." A legitimate request with a clear next step wa
 as a system fault, and the guidance was discarded. `TooBroad` passes its message through verbatim;
 genuine faults still hide their detail. Caught by exercising the tools over stdio rather than
 through the CLI, which is an argument for testing the surface volunteers actually use.
+
+## D26. Onboarding lives in the bundle, because a bootstrap skill cannot exist
+
+*September 2026*
+
+The question was whether a single "bootstrap" skill could install the other skills and the
+extension, or at least walk a volunteer through it. Checked against the MCPB manifest schema and
+the Claude Desktop docs:
+
+* **The manifest has no `skills` field.** Confirmed against the schema in
+  `modelcontextprotocol/mcpb`: the top-level fields are `manifest_version`, `name`, `version`,
+  `description`, `author`, `server` (required) plus `display_name`, `long_description`, `icon`,
+  `icons`, `repository`, `homepage`, `documentation`, `support`, `screenshots`, `tools`,
+  `tools_generated`, `prompts`, `prompts_generated`, `keywords`, `license`, `privacy_policies`,
+  `compatibility`, `user_config`, `localization`, `_meta`. A `.mcpb` cannot carry a skill.
+* **Skills install one at a time**, per user and per surface: Settings → Capabilities → Skills.
+  Skills on claude.ai do not sync to Claude Desktop.
+* **No skill can install anything.** Skills are instructions plus files; there is no installer
+  primitive. Claude Desktop has no equivalent of Claude Code's `/plugin install org/repo`.
+* **Whether Claude Desktop surfaces MCP prompts in its UI remains undocumented** (still true since
+  D18).
+
+So a bootstrap *skill* is not merely unsupported, it is the wrong shape: it has the same
+installation problem it would exist to solve. A volunteer who can install it could have installed
+the real skills.
+
+**The dependency inverts instead.** The extension is the one artefact that must be installed, it
+installs by dragging one file, and once it is in it can explain everything else. Onboarding
+therefore lives in the bundle:
+
+* **`getting_started`** — a read-only tool, and the only one that works with no credentials. It
+  says what the extension does in two paragraphs of plain words and reports whether set-up is
+  finished. A matching prompt exists for clients that surface prompts.
+* **The server no longer exits when credentials are missing.** This was the worst failure in the
+  product: with the two boxes empty the process exited at startup and its explanation went to
+  stderr, i.e. a Claude Desktop log file no volunteer will ever open. The extension simply
+  appeared dead. It now starts regardless, and `ServWareError::NotConfigured` — raised at
+  `login()`, the single point every ServWare call funnels through — returns numbered instructions
+  naming the actual menu items. Distinct from `LoginFailed`, where something *was* rejected.
+* **Manifest metadata is now filled in**: `long_description` covering both jobs, plus `homepage`,
+  `documentation` (pointing at `docs/for-volunteers.md`, written for volunteers rather than the
+  developer README) and `support`. `license` was removed rather than claim one with no LICENSE
+  file in the repo.
+* **Three desktop shortcuts** instead of one — Start Here, Record Deliveries, Get a List of
+  Families — since the deep link is the shortest path this audience has.
+
+**The irreducible manual step is the first one:** somebody has to hand the volunteer the `.mcpb`
+file. Nothing in any Claude surface can bootstrap that, so it stays a person-to-person handoff.
+Everything after it is now self-explaining.
+
+**The skills remain optional polish.** Correctness invariants live in the bundle (D25); the skills
+add conversational guidance. A volunteer who installs only the extension gets right answers with a
+less-guided conversation, which is the correct failure mode.
+
+## D27. Skills are a build artifact, one zip per skill
+
+*September 2026*
+
+The first `svdp-skills.zip` was created by a `zip` command typed once by hand during a deploy. It
+existed on one Desktop, in no script and no workflow, and was cited in setup instructions as
+though it were a real artifact. It was also **wrong**: it held both skill folders, and Claude
+Desktop's upload takes a single skill, so it would probably not have installed at all.
+
+`scripts/build-skills.sh` now emits **one zip per skill** (`svdp-skill-<name>.zip`), each
+containing that skill's directory and nothing else. It runs in the release workflow as its own
+job — skills are plain markdown and platform-independent, so they build once rather than once per
+target — and the zips are attached to the release alongside the three bundles. `deploy-mac.sh`
+builds them too, so a local deploy and a release produce the same set.
+
+The script **validates frontmatter before zipping**: keys restricted to the six claude.ai accepts
+(`name`, `description`, `license`, `compatibility`, `metadata`, `allowed-tools`), `name` matching
+the directory, and `description` under 200 characters. Verified to fail on an injected
+`when_to_use` key. An upload dialog is a bad place to discover a frontmatter problem, and CI
+additionally asserts each zip has exactly one top-level entry and a `SKILL.md`.
+
+Note `recording-svdp-deliveries` sits at 199 characters, one under the limit — a future edit will
+trip the check, which is the point.
+
+The general lesson is the one worth keeping: **an artifact referenced in user-facing instructions
+must come from a script.** Anything assembled by hand for a demo is not a deliverable, and citing
+it as one is how instructions rot on contact.
+
+### D27 amendment: one zip for all skills, not one per skill
+
+*September 2026*
+
+Per-skill zips were the wrong end of the trade. A volunteer would have to find and download N
+files and keep track of which was which.
+
+`build-skills.sh` now produces a single **`svdp-skills.zip`** containing one top-level
+`svdp-skills/` directory, one folder per skill inside it, and a `HOW-TO-ADD-THESE.txt`. This works
+because Claude Desktop's skill picker accepts a **folder**: the volunteer unzips once and adds
+each folder in turn. The single top-level directory keeps an unzip from scattering folders across
+Downloads.
+
+The one-skill-per-upload constraint has not gone away — it is now handled by unzipping first
+rather than by shipping separate archives. The instructions travel inside the zip, since this
+audience does not read repositories (D26).
+
+CI asserts the zip has exactly one top-level entry named `svdp-skills`, that the instruction file
+is present, and that **every** skill directory in the repo appears with its `SKILL.md` — so adding
+a skill and forgetting to ship it fails the release. That check was run locally against a
+deliberately incomplete zip to confirm it fails rather than merely existing.
+
+## D28. One archive per platform is what a volunteer receives
+
+*September 2026*
+
+Supersedes the D27 amendment, which was built on a wrong assumption of mine: I believed Claude
+Desktop's skill picker accepted a *folder*, and shipped a zip of unzipped skill folders on that
+basis. **Claude Desktop accepts a zip for a skill.** Corrected by Cory, whose actual concern was
+never the number of downloads but that volunteers would not know how to unzip anything.
+
+The shape is now one file per platform:
+
+```
+svdp-servware<suffix>.zip
+└── svdp-servware/
+    ├── START-HERE.txt
+    ├── svdp-servware.mcpb
+    └── skills/
+        ├── pulling-svdp-data.zip
+        └── recording-svdp-deliveries.zip
+```
+
+**One unzip, then two kinds of install:** drag the `.mcpb` into Settings → Extensions, then add
+each skill zip under Settings → Capabilities → Skills, left zipped. The single top-level directory
+means unzipping produces one folder rather than scattering files.
+
+`scripts/build-release.sh` assembles it, calling `build-mcpb.sh` and `build-skills.sh`. Inside the
+archive the bundle is named without a platform suffix, so `START-HERE.txt` reads identically on
+every machine.
+
+**Consequence: the archive is per-platform, so skills no longer build as their own CI job.** The
+`.mcpb` carries a platform-specific binary, so each matrix target assembles its own archive;
+skills are markdown and cost nothing to rebuild per runner. The release publishes three zips and
+no bare `.mcpb` — a volunteer choosing between a `.zip` and a `.mcpb` is a choice they should not
+have to make.
+
+CI verifies, per platform: exactly one top-level entry named `svdp-servware`; `START-HERE.txt` and
+`svdp-servware.mcpb` present; a zip present for **every** skill directory in the repo; the inner
+`.mcpb` containing `bin/svdp-mcp` with a manifest whose platform matches the matrix; and each
+skill zip being a readable archive rooted at its own skill directory. Every one of those checks
+was executed locally against deliberately broken archives, including one with the bundle deleted
+and one with a skill withheld, to confirm they fail rather than merely run.
+
+**Instructions ride inside the archive.** `START-HERE.txt` is the primary setup document, not
+`docs/for-volunteers.md` and not the release notes: this audience is assumed to read nothing
+outside what they were handed.

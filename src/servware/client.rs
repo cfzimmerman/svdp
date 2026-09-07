@@ -86,7 +86,18 @@ impl ServWareClient {
 
     /// Authenticate. A failed login redirects back to the login page rather than
     /// returning an error status, so the final URL is the signal.
+    /// Whether credentials were supplied at all.
+    pub fn is_configured(&self) -> bool {
+        !self.credentials.username.trim().is_empty()
+    }
+
     pub async fn login(&self) -> Result<()> {
+        // Every ServWare call funnels through here, so one check covers all of
+        // them. The server deliberately starts without credentials so it can say
+        // this out loud; exiting instead put the explanation in a log file.
+        if !self.is_configured() {
+            return Err(ServWareError::NotConfigured);
+        }
         let url = self.url("/security/login")?;
         let params = [
             ("username", self.credentials.username.as_str()),

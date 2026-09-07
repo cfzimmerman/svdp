@@ -372,6 +372,26 @@ fn asking_for_too_much_gives_guidance_not_a_fault() {
     );
 }
 
+/// An extension installed but not yet given a username and password must say so
+/// in words a volunteer can act on. Previously the server exited at startup and
+/// the explanation went to a log file, so the extension simply appeared dead.
+#[test]
+fn an_unconfigured_extension_explains_itself() {
+    let msg = svdp::servware::error::ServWareError::NotConfigured.user_message();
+    for expected in ["Settings", "Extensions", "SVdP ServWare", "servware.org"] {
+        assert!(msg.contains(expected), "setup text must mention {expected}: {msg}");
+    }
+    assert!(
+        !msg.contains("env") && !msg.contains("SERVWARE_USER") && !msg.contains("log"),
+        "must not mention environment variables or log files"
+    );
+    // Not to be confused with a rejected sign-in: nothing was tried.
+    assert_ne!(
+        msg,
+        svdp::servware::error::ServWareError::LoginFailed.user_message()
+    );
+}
+
 #[test]
 fn listing_shows_only_exports() {
     let tmp = tempfile::tempdir().unwrap();

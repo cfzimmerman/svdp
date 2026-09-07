@@ -110,9 +110,30 @@ family information — keep them on your own computer.**
 ### Building
 
 ```bash
-cargo test                 # whole suite, no network needed
-./scripts/build-mcpb.sh    # -> dist/svdp-servware.mcpb, for this machine
+cargo test                  # whole suite, no network needed
+./scripts/build-release.sh  # -> dist/svdp-servware<suffix>.zip, the file volunteers get
+./scripts/build-mcpb.sh     # just the extension
+./scripts/build-skills.sh   # just the skill zips, into dist/skills/
+./scripts/make-shortcut.sh  # desktop icons that open Claude with the request ready
 ```
+
+**One archive is what a volunteer receives:**
+
+```
+svdp-servware<suffix>.zip
+└── svdp-servware/
+    ├── START-HERE.txt              the whole setup, in the archive
+    ├── svdp-servware.mcpb          install under Settings → Extensions
+    └── skills/
+        ├── pulling-svdp-data.zip        add each as a skill, still zipped
+        └── recording-svdp-deliveries.zip
+```
+
+One unzip, then two kinds of install. Skills cannot live inside the `.mcpb` — the MCPB manifest
+has no `skills` field — and Claude Desktop's skill upload takes a **zip**, not a folder, so they
+ship zipped inside the archive. The `.mcpb` carries a platform-specific binary, so the archive is
+per-platform too. `build-skills.sh` validates every skill's frontmatter against what claude.ai
+accepts before packaging. See DECISIONS.md D26 and D27.
 
 Releases are built by GitHub Actions for all three targets — push a `v*` tag. A `.mcpb` carries
 a compiled binary, so each platform needs its own bundle. Don't hand-build for volunteers; let

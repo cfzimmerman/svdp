@@ -157,6 +157,61 @@ struct ReadExportParams {
 
 #[tool_router]
 impl Svdp {
+    /// Explains what this extension can do and whether it is ready to use.
+    ///
+    /// Use whenever someone asks what this can do, says they are new to it, does
+    /// not know how to start, or seems stuck. Safe to call before anything is set
+    /// up — it is the one tool that works with no username and password.
+    #[tool(name = "getting_started", annotations(read_only_hint = true))]
+    async fn getting_started(&self) -> Result<CallToolResult, ErrorData> {
+        let mut lines = vec![
+            "This connects Claude to ServWare for St. Vincent de Paul at Nativity. \
+             It does two jobs."
+                .to_string(),
+            String::new(),
+            "1. RECORDING DELIVERIES. Say \"I did deliveries today\". I will show the \
+             families who are waiting, ask which ones you reached, check the gift card \
+             amounts with you, ask who drove, show you the whole list, and only then \
+             save it to ServWare. Nothing is written until you say yes."
+                .to_string(),
+            String::new(),
+            "2. GETTING LISTS OF FAMILIES. Say \"I need a list of families with young \
+             children\", or whatever your project needs. I will save spreadsheets to \
+             your Desktop and help you work out the answer. This includes everyone in \
+             each household and their ages, which no ServWare report can give you."
+                .to_string(),
+            String::new(),
+        ];
+
+        if !self.client.is_configured() {
+            lines.push("SET-UP IS NOT FINISHED.".to_string());
+            lines.push(svdp::servware::error::SETUP_INSTRUCTIONS.to_string());
+            return Ok(ok(lines.join("\n")));
+        }
+
+        match self.client.login().await {
+            Ok(()) => lines.push(
+                "Your ServWare sign-in is working, so you can start whenever you like. \
+                 Just say what you want in your own words."
+                    .to_string(),
+            ),
+            Err(e) => {
+                lines.push("There is a problem with the sign-in:".to_string());
+                lines.push(e.user_message());
+                return Ok(ok(lines.join("\n")));
+            }
+        }
+
+        lines.push(String::new());
+        lines.push(
+            "Two things worth knowing. Your ServWare password is stored by your own \
+             computer and never appears in this conversation. And the spreadsheets hold \
+             real family information, so they should stay on your computer."
+                .to_string(),
+        );
+        Ok(ok(lines.join("\n")))
+    }
+
     /// Checks that ServWare is reachable, the sign-in works, and the request and
     /// assistance-type formats are still what this tool expects. Run this first.
     #[tool(name = "servware_health", annotations(read_only_hint = true))]
@@ -789,6 +844,16 @@ fn fail(e: &ServWareError) -> CallToolResult {
 /// this is the shortest path from "I did deliveries" to the workflow running.
 #[prompt_router]
 impl Svdp {
+    /// What can this do, and is it set up?
+    #[prompt(name = "getting_started")]
+    async fn getting_started_prompt(&self) -> Result<Vec<PromptMessage>, ErrorData> {
+        Ok(vec![PromptMessage::new_text(
+            rmcp::model::Role::User,
+            "I have just installed the SVdP ServWare extension. Please tell me what it \
+             can do and whether it is set up properly.",
+        )])
+    }
+
     /// Record today's SVdP deliveries in ServWare
     #[prompt(name = "record_deliveries")]
     async fn record_deliveries_prompt(&self) -> Result<Vec<PromptMessage>, ErrorData> {
@@ -872,12 +937,16 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let credentials = Credentials::from_env().ok_or_else(|| {
-        anyhow::anyhow!(
-            "ServWare username and password are not configured. Open the extension's \
-             settings in Claude Desktop and fill them in."
-        )
-    })?;
+    // Start regardless. An unconfigured server that exits leaves a volunteer with
+    // an extension that silently does nothing and an explanation in a log file
+    // they will never open; one that starts can tell them what to do.
+    let credentials = Credentials::from_env().unwrap_or_else(|| {
+        tracing::warn!("no ServWare credentials; tools will explain how to add them");
+        Credentials {
+            username: String::new(),
+            password: String::new().into(),
+        }
+    });
     let base = std::env::var("SERVWARE_BASE_URL")
         .unwrap_or_else(|_| PUBLIC_BASE_URL.to_string());
 

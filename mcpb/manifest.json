@@ -3,8 +3,8 @@
   "name": "svdp-servware",
   "display_name": "SVdP ServWare",
   "version": "0.3.0",
-  "description": "Record St. Vincent de Paul food and gift card deliveries in ServWare.",
-  "long_description": "Guides a volunteer through recording a delivery night: lists open assistance requests, confirms gift card amounts, splits deliveries by volunteer group, and writes the results back to ServWare.",
+  "description": "Record SVdP deliveries in ServWare, and pull neighbour information into spreadsheets.",
+  "long_description": "Two jobs for St. Vincent de Paul volunteers, both in plain conversation.\n\nRECORDING DELIVERIES. Say \"I did deliveries today\". It lists the families waiting, asks which ones you reached, checks the gift card amounts with you, asks who drove, shows you everything, and only writes to ServWare after you say yes.\n\nGETTING LISTS OF FAMILIES. Say \"I need a list of families with young children\". It saves spreadsheets to your Desktop -- who the conference serves, who asked for help and when, what was given, and everyone in each household with their ages -- then helps you work out the answer. Ages are not in any report ServWare can export.\n\nYour ServWare username and password are stored by your computer and never appear in the conversation. Nothing is sent anywhere except ServWare itself.",
   "author": {
     "name": "Cory Zimmerman",
     "url": "https://github.com/cfzimmerman/svdp"
@@ -41,6 +41,17 @@
     }
   },
   "compatibility": {
-    "platforms": ["darwin"]
-  }
+    "platforms": [
+      "darwin"
+    ]
+  },
+  "homepage": "https://github.com/cfzimmerman/svdp",
+  "documentation": "https://github.com/cfzimmerman/svdp/blob/main/docs/for-volunteers.md",
+  "support": "https://github.com/cfzimmerman/svdp/issues",
+  "keywords": [
+    "svdp",
+    "servware",
+    "volunteers",
+    "nonprofit"
+  ]
 }
