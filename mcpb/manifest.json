@@ -1,0 +1,57 @@
+{
+  "manifest_version": "0.3",
+  "name": "svdp-servware",
+  "display_name": "Nativity ServWare",
+  "version": "0.3.0",
+  "description": "Allows Claude to run a few pre-defined operations on Nativity's ServWare instance.",
+  "long_description": "Saint Vincent de Paul work at Nativity involves some routine book keeping tasks. The most common is entering ServWare data after delivering food. Similar lower-frequency projects like Adopt a Family also arise. This bundle allows Claude to perform some basic ServWare operations for you. The easiest way to get started is by invoking the related Skill files or asking Claude what SVdP tasks it can help with.",
+  "author": {
+    "name": "Cory Zimmerman",
+    "url": "https://github.com/cfzimmerman/svdp"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cfzimmerman/svdp.git"
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "bin/svdp-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/bin/svdp-mcp",
+      "args": [],
+      "env": {
+        "SERVWARE_USER": "${user_config.servware_user}",
+        "SERVWARE_PASS": "${user_config.servware_pass}"
+      }
+    }
+  },
+  "user_config": {
+    "servware_user": {
+      "type": "string",
+      "title": "ServWare username",
+      "description": "servware.org username",
+      "required": true
+    },
+    "servware_pass": {
+      "type": "string",
+      "title": "ServWare password",
+      "description": "servware.org password",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin"
+    ]
+  },
+  "homepage": "https://github.com/cfzimmerman/svdp",
+  "documentation": "https://github.com/cfzimmerman/svdp/blob/main/docs/for-volunteers.md",
+  "support": "https://github.com/cfzimmerman/svdp/issues",
+  "keywords": [
+    "svdp",
+    "servware",
+    "volunteers",
+    "nonprofit"
+  ]
+}

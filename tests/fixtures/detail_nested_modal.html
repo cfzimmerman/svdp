@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html><head><title>Assistance Request</title></head><body>
+<form id="editForm" method="post" action="/app/assistancerequests/3724739">
+  <select name="status"><option value="Open" selected>Open</option></select>
+  <textarea name="visitNotes">&lt;p&gt;Prior visit&lt;/p&gt;</textarea>
+  <input type="checkbox" name="visitCompleted" value="true"/>
+  <div class="modal">
+    <form id="sendEmailForm" method="post" action="/app/sendemail">
+      <select name="sendToRoleId"><option value="3">Conference President</option></select>
+    </form>
+  </div>
+  <input type="hidden" name="controlAfterTheModal" value="dropped-by-the-parser"/>
+</form>
+</body></html>

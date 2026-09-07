@@ -1,55 +1,262 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repository.
 
-**Every Claude session must keep CLAUDE.md updated** with project purpose, user feedback, and decisions so context carries across sessions.
+**Keep this file updated** with project purpose, decisions, and user feedback so context
+carries across sessions.
+
+## Log decisions and discoveries
+
+`DECISIONS.md` is the trail of intent: why the project is shaped as it is, including the
+**rejected alternatives** and the reason they lost. Read it before proposing a change to the
+architecture — most of the obvious-looking alternatives have already been considered and ruled
+out for reasons that are not obvious.
+
+Append to it as part of the work, not as a cleanup pass afterward:
+
+- A **decision** gets an entry with its rationale and what was rejected. A decision without its
+  rationale gets re-litigated.
+- A **discovery** — something established by running it and observing the result, especially
+  where it contradicts documentation or intuition — gets an entry with how it was verified, so a
+  later session can re-verify rather than trust blindly.
+- When a finding **overturns an earlier claim, including one of your own**, say so explicitly.
+  The correction is the valuable part.
+
+## Git
+
+**Do not make git writes.** No `commit`, `push`, `branch`, or `reset`, and do not offer to —
+Cory commits his own work. Read-only git (`status`, `log`, `diff`, `show`) is fine and useful.
+At a natural checkpoint, just say what changed.
 
 ## Project
 
-**Repository**: svdp (github.com/cfzimmerman/svdp)
+**Repository**: svdp (github.com/cfzimmerman/svdp) — **public**.
 
-SVDP (St. Vincent de Paul) at Nativity Catholic Church in Menlo Park delivers food to community members in need. The county takes requests via a web app called **ServWare** (servware.org), a jQuery/Bootstrap server-rendered app built for SVDP chapters. There are no public API docs.
+SVdP (St. Vincent de Paul) at Nativity Catholic Church in Menlo Park delivers food and
+grocery gift cards to families in need. The county records requests in **ServWare**
+(servware.org), a Spring MVC + jQuery/Bootstrap app with no public API.
 
-### Goals
+Twice a week volunteers deliver in one to three groups, then must mark requests Complete
+and log dollar values for food and gift cards. This tool automates that last step.
 
-1. Query open requests from ServWare and export to CSV
-2. Read/sort CSV to find oldest open requests
-3. Apply updates back to ServWare
+### Goal
 
-### Current Phase
+Make the workflow usable by **elderly, non-technical volunteers** — no terminal, no
+spreadsheets — via an MCP server installed into the Claude Desktop **Chat tab**.
 
-**Phase 1**: HTTP client foundation — authenticate with ServWare and make requests. This requires reverse-engineering the API with the user's help via browser dev tools network captures.
+## PII: the hard rule
 
-### What we know about ServWare
+Neighbour data is sensitive information about vulnerable families, and this repo is public.
 
-Full API reference: **`servware/api.md`** (reverse-engineered from HAR captures)
-
-Key endpoints:
-- `POST /security/login` — form fields: `username`, `password` → 302 to `/app/home?continue`
-- `GET /app/assistancerequests/list` — DataTables SSP JSON API, returns `{sEcho, iTotalRecords, iTotalDisplayRecords, aaData}`
-- `POST /app/assistancerequests/{id}` — update request (mark complete), 30 form fields, Spring MVC checkbox convention
-- `POST /app/assistancerequests/{id}/assistanceitems/new` — add assistance item
-
-Session: HttpOnly cookies (not visible in HAR exports), 1-hour timeout, extendable via `GET /security/extendSession`
+- **Never commit CSVs, HAR captures, or anything derived from a real ServWare response.**
+  `.gitignore` matches by glob (`*.csv`, `*.har`), not by filename — the old exact-name list
+  missed the `group1.csv` files the documented workflow told users to create.
+- **Fixtures are synthetic by construction** (`scripts/gen-fixtures.py`), not scrubbed from
+  real data. Field *names* are protocol facts and safe; every *value* is invented.
+- Real captures are validated against by an **opt-in local test** that reads a path from
+  `SVDP_LOCAL_DETAIL_HTML` and prints structure only, never values.
+- Do not print neighbour or volunteer PII into transcripts, terminal output, or logs. The
+  request detail page carries names, addresses, phones, **SSN last-4**, driver's licence, and
+  the family's full request history. The CLI shortens names to "Ada L." unless `--full-names`
+  is passed, and `svdp snapshot` asks `git check-ignore` and **refuses to write** rather than
+  claiming a path is ignored. See DECISIONS.md D49.
+- **CSV cells are defused against formula injection.** These files exist to be double-clicked
+  into Excel and ServWare's free-text fields are typed by caseworkers, so a leading `=`/`+`/`-`/`@`
+  is quoted — except where the cell is a number, so amounts still sum.
+- **CSV exports emit an allowlist, pinned by a test.** Never SSN, driver's licence, identity
+  documents, case notes, alert notes, or **dates of birth** — exports carry ages instead, so a
+  spreadsheet passed between volunteers never holds name + address + DOB. In the household
+  members table the identity columns are never even read out of the DOM. See DECISIONS.md D21.
+- **Exports never enter a conversation on their own.** An export tool returns a path and a row
+  count; `read_export` hands over the text only when someone asks for analysis.
 
 ## Architecture
 
-- **Language**: Rust (edition 2024)
-- **Error handling**: `anyhow::Result` everywhere, `.context()` for meaning, `bail!`/`ensure!` for conditions. No custom error types.
-- **HTTP client**: `reqwest` with `cookie_store(true)` for automatic session management
-- **Credentials**: env vars (`SVDP_USERNAME`/`SVDP_PASSWORD`) for scripting, `rpassword` interactive prompt for manual use. No config file.
-- **Password safety**: `secrecy::SecretString` wraps password to prevent accidental logging
-- **CLI**: `clap` derive-based subcommands
+- **Language**: Rust (edition 2024). Chosen over a TypeScript port for dependency stability
+  and because typed errors make "did this write land?" checkable.
+- **Two UIs over one logic layer**: `src/bin/mcp.rs` (volunteers, via Claude Desktop) and the
+  CLI (maintainer). Protocol and domain logic stay independent of both.
+- **Errors**: `thiserror` types at the library boundary — the MCP layer must *match* on error
+  kind to choose retry / skip / escalate. `anyhow` in binaries only. (This reverses an earlier
+  rule in this file that said "no custom error types"; that was right for a pure CLI.)
+  `WriteRejected` and `WriteUnverifiable` are **not interchangeable**: the first means read-back
+  proved nothing changed, the second means something may well have landed and the volunteer is
+  told *not* to retry. ServWare cannot delete an assistance item, so getting that wrong is how
+  one $70 entry becomes three. See DECISIONS.md D41.
+- **Never guard a write with `debug_assert!`.** `--release` compiles them out and `--release` is
+  what ships; two money checks existed only in debug builds. CI fails on `debug_assert!(` in
+  `src/`. Validate at parse time where possible (the gift-card ladder does), and return a typed
+  error otherwise. See DECISIONS.md D34.
+- **HTTP**: `reqwest` with a cookie jar. Base URL is **injected**, not a const, so tests point
+  at a local server and exercise real cookies, redirects, and encoding.
 
-## Build and Run
+### Data pulls — the extension extracts, Claude analyses
+
+Beyond deliveries the conference runs occasional projects (Christmas Adopt-a-Family) that need
+to *understand* the neighbour population. The rule is that **the Rust produces honest, wide,
+joinable tables and stops**; filtering, grouping and arithmetic happen in the conversation.
+No query language, no filter DSL, no report-specific logic in code. See DECISIONS.md D20.
+
+Three grains, all joinable on `client_id`, written to the Desktop as CSV:
+
+| table | one row per | source | cost |
+|---|---|---|---|
+| `neighbors` | household | `/app/clients/list` | ~5 JSON pages |
+| `requests` | assistance request | `/app/assistancerequests/list`, date-windowed | a few pages |
+| `assistance` | assistance **item**, with `date_provided` | same pull as `requests` | free |
+| `household-members` | person, **with age** | request detail pages | one page per household |
+
+Project-specific knowledge lives in `skills/pulling-svdp-data/references/`, deliberately
+overfit, because markdown gets edited next season rather than recompiled.
+
+**A parser must not return "empty" for "broken".** Silent degradation is the dominant durability
+risk here: ServWare drift produces a *confident wrong answer* rather than an error. An empty
+household roster is a real and common answer (a head count instead of people), so it must be
+distinguishable from a missing tab — otherwise a renamed element has the tool announce that no
+family in the conference has anyone living in it. Table columns are resolved by header text from
+**the first header row only**, and a body row whose cell count disagrees is an error, because the
+columns just past `Age` are Phone and **SSN (Last 4)**. See DECISIONS.md D32, D40.
+
+**Exports carry recorded fact, never derived policy.** The gift-card ladder and the food amount
+are a *delivery* decision; what another program spends is the volunteer's call. `domain::export`
+and `domain::pull` must never import `domain::policy`, and a test fails if they do. Likewise
+nothing caps a household: the spreadsheet this replaces held four children and dropped the rest.
+See DECISIONS.md D24.
+
+**`date_requested` and `date_provided` are different questions.** ServWare's own Neighbor
+Assistance Summary report keys on when help was *given*; the window filter here keys on when a
+family *asked*. Reconciling against a real volunteer spreadsheet, request-date totals overshot
+hers for 15 households while assistance-date totals overshot for none. Use the `assistance`
+table for "what did they receive between two dates". See DECISIONS.md D23.
+
+### Form handling — the load-bearing piece
+
+`src/servware/form.rs` extracts *every* named control from a form and applies a checked
+overlay. Never enumerate fields by hand.
+
+Why: the live request edit form renders **50 named controls**; the old hand-written builder
+sent 39 and silently cleared the other 11 (`otherVisitCnt`, `eldercareVisitCnt`,
+`hospitalVisitCnt`, `prisonVisitCnt`, `phoneVisitCnt`, `churchPantryVisitCnt`,
+`referralOrganizationId{,2,3,4}`, `referralConference`) on every mark-complete.
+
+Rules encoded there, verified against a real capture:
+- Extraction is **form-scoped** — the page has other forms (a send-email modal) whose controls
+  must not leak in. Scoping only works while those forms are *siblings*: html5ever drops a nested
+  `<form>` start tag and closes the outer form at the first `</form>`, which both absorbs the
+  modal's controls and loses every real control after it. Extraction compares a lexical count of
+  `<form` tags against the parsed count and refuses on a mismatch. See DECISIONS.md D48.
+- **Checkboxes and radios are different.** A checkbox overlay decides *whether* it submits; a
+  radio overlay picks *which* button submits, by declared value. Conflating them made
+  `overlay([("mode","B")])` submit `A`.
+- `extract_containing` is passed the **full** set of fields the caller will overlay
+  (`write::COMPLETION_FIELDS`), so a page missing one fails to parse rather than POSTing without
+  it. That constant is the only list of those fields — the write, the CLI dry run and both health
+  checks all read it. See DECISIONS.md D33.
+- `id` and `name` diverge (`id="homeVisitAssignedFirst"` is `name="visitAssignedToMemberId"`).
+  **Always key on `name`.**
+- Unchecked checkboxes are **rendered but not submitted**. The full control inventory is kept
+  so an overlay can tell "ServWare removed this field" (an error) from "this box is off"
+  (normal, and what marking a visit complete flips).
+- Spring MVC checkbox convention: `name=value` only when checked, `_name=on` always.
+- Overlaying a control the form does not render is a **hard error** — the canary for ServWare
+  renaming something.
+
+## Verified facts (spike, Sep 2026)
+
+- **`rmcp` 3.2.0** works: stdio server, tool schemas derived from serde structs via `schemars`,
+  `annotations(read_only_hint = true)` for client auto-approval. Requires Rust ≥ 1.88.
+- **`.mcpb` packaging works with a Rust binary.** `server.type = "binary"`,
+  `command: "${__dirname}/bin/svdp-mcp"`. Build with `scripts/build-mcpb.sh`; it validates the
+  manifest before zipping. `manifest_version` must be `0.3`/`0.4`, and **every `user_config`
+  entry requires `description`** (omitting it fails install with "Required, Required").
+- **Gatekeeper is a non-issue.** Claude Desktop does not propagate the quarantine attribute
+  when unpacking a bundle; a downloaded `.mcpb` installs and runs. No Developer ID or
+  notarization needed.
+- **`sensitive: true` values are encrypted at rest** in
+  `~/Library/Application Support/Claude/Claude Extensions Settings/<ext>.json`, keyed by the
+  `Claude Safe Storage` keychain item, and injected as env vars at server spawn. The model
+  never sees the value.
+- An installed extension starts **disabled**; it must be toggled on before tools appear.
+- No CSRF token in the request form — all 14 hidden fields are accounted for.
+- **The request detail page is six tabs, all server-rendered inline** — no XHR for any of them.
+  `div#tabs-familymembers` carries each household member's **integer Age**, computed server-side;
+  there is no per-member birthdate anywhere on the page.
+- **That table excludes the neighbour themselves.** Verified across 139 real households: no
+  "Self" row ever appears, and `calculatedHouseholdCount` was the row count **plus one** every
+  time. Household size derived from these rows must add one.
+- **A household may have no roster at all.** ServWare allows a head count *or* individual
+  members, not both — 19 of 158 households in one window, 8 of them with children. Report those
+  families separately; never let them vanish from an answer.
+- **`/app/clients/list`** is the same DataTables protocol as the request list and returns the
+  whole conference roster (`iTotalRecords: 416` at Nativity) as complete Client objects.
+  `/app/clients/{id}` is *not* usable for household members: its roster div is XHR-filled.
+- The ~24 report routes exist and are **deliberately unexplored**; `api.md` §12 lists them.
+- **The list endpoint sorts by `mDataProp_{iSortCol_0}`, confirmed live (Sep 2026).** Two reads
+  differing only in that mapping returned the same 50 rows in different orders: per-column gives
+  `dateRequested` order, `mDataProp_N="id"` gives id order. The two are **not** interchangeable —
+  a back-dated request already sits in the first page — and every date-windowed caller assumes
+  date order. Keep `mDataProp` matching `sColumns`. See DECISIONS.md D44.
+- **Reaching an old date window needs a seek.** Rows come back newest-first, so a window a year
+  back sits behind ~1,200 newer requests. `list::seek_window_start` binary-searches for it with
+  single-row probes. The conference had 4,907 requests total in September 2026.
+- Validated against a volunteer's hand-built 2025 spreadsheet: child ages reconcile at 97%, head
+  ages at 99%, and nothing in her file exceeds what this tool finds. See DECISIONS.md D23.
+- ServWare sessions expire after 3600s; long delivery-night chats will cross that, so
+  transparent re-auth is a functional requirement.
+
+## Known defects in the legacy `src/api` + `src/nativity.rs` path
+
+Being replaced; do not extend. Writes accept any 2xx/3xx as success while Spring re-renders a
+rejected form as 200 (so failures report as successes); blanket `#[serde(default)]` turns a
+renamed `calculatedHouseholdCount` into `0`, which the gift-card ladder maps to $50 for every
+family; `add_assistance` is not idempotent and double-logs money on re-run; `?` inside write
+loops strands batches with no recovery path; the list call caps at 100 with no pagination.
+
+## Build and run
+
+CI runs on every branch (`branches: ['**']` — a fixed branch list meant it had never run at all),
+and its PII gate covers `.html` and `.json` as well as `.csv`/`.har`. Fixtures are checked by
+**provenance**: CI re-runs `scripts/gen-fixtures.py` and fails if the tree differs, which a real
+capture cannot survive. Regenerate fixtures whenever you change that script.
 
 ```bash
-cargo build                                    # Build
-cargo run -- login                             # Test login
-cargo run -- ping                              # Test session keepalive
-RUST_LOG=svdp=debug cargo run -- login         # Debug logging
+cargo test                      # must pass with no network
+cargo build --bin mcp           # the MCP server
+./scripts/build-mcpb.sh         # -> dist/svdp-servware.mcpb (run on the target platform)
+python3 scripts/gen-fixtures.py # regenerate synthetic fixtures
+
+# Data pulls (maintainer CLI; the MCP tools do the same thing):
+cargo run --bin svdp -- export-neighbors
+cargo run --bin svdp -- export-requests --from 06/01/2026 --to 08/31/2026
+cargo run --bin svdp -- export-household-members --from 06/01/2026 --to 08/31/2026
+cargo run --bin svdp -- snapshot --path /app/clients/123   # capture any page for a spike
+                                                          # (refuses unless git ignores the path)
+
+# Validate against a real local capture (never committed):
+SVDP_LOCAL_DETAIL_HTML=/path/detail.html cargo test --test local_capture -- --ignored --nocapture
 ```
 
-## Dev Environment
+Credentials come from `SERVWARE_USER` / `SERVWARE_PASS` (env, or `.env`). The `.mcpb` supplies
+them from its `user_config`.
 
-Docker-based dev environment. Use `./run-dev.sh` to start.
+## Documentation
+
+Written for four audiences; keep them in their lanes.
+
+- `docs/for-volunteers.md` — the user guide, and what the extension's `documentation` link points
+  at. Plain words, no jargon, no repository paths.
+- `docs/maintaining.md` — build, release, deploy, the CLI, production-safety and PII rules, and an
+  honest list of what is unverified.
+- `DECISIONS.md` — why it is shaped this way, including rejected alternatives.
+- `api.md` — the reverse-engineered ServWare protocol.
+
+`START-HERE.txt`, generated into the release archive by `scripts/build-release.sh`, is the
+**primary** setup document for a volunteer. Anything a volunteer must do belongs there first;
+`docs/for-volunteers.md` is the longer version of the same thing. The root `README.md` is
+deliberately a stub for the maintainer's own note — do not move documentation back into it.
+
+## Reference
+
+`api.md` is the reverse-engineered ServWare API reference. It is **partly abridged** — its
+assistance-item section lists 13 form fields where the real browser POST sends 30. Where
+`api.md` and a capture disagree, the capture wins, and `api.md` should be corrected.

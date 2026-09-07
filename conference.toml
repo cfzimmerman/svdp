@@ -1,0 +1,34 @@
+# Conference policy for SVdP at Nativity Catholic Church, Menlo Park.
+#
+# Embedded into the binary with include_str!, so a build always has valid
+# defaults. An external conference.toml (working directory, or the path in
+# SVDP_CONFERENCE_CONFIG) overrides it -- useful for another conference, whose
+# assistance type IDs will differ.
+
+gift_card_ladder = [50, 60, 70, 80, 90, 100]  # by household size; first = floor, last = ceiling
+visit_mileage = "5"
+visit_notes_html = "<p>Delivered food and gift cards</p>"
+
+# The largest amount this tool will record in a single assistance item. Not a
+# policy figure -- it is a backstop, because ServWare cannot delete an item once
+# it is written. Anything genuinely larger is entered on the website by hand.
+max_item_dollars = 500
+
+# Families receive one delivery a month, so a household delivered to within this
+# many days is held back from the working list by default.
+#
+# 28, not 30, and that is load-bearing. Deliveries run on fixed weekdays, so a
+# "monthly" cadence lands on exactly four weeks very often: across 1,114 real
+# repeat deliveries, a 28-day threshold would have held back 55 of them (5%) but
+# a 30-day threshold would have held back 280 (25%). See DECISIONS.md D29.
+delivery_interval_days = 28
+
+[second_harvest]
+id = "16542"
+name_contains = "Second Harvest"
+value = 70
+
+[gift_card]
+id = "16522"
+name_contains = "Gift Card"
+# no fixed value: scales with household size

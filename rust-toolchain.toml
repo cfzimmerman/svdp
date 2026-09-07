@@ -1,0 +1,14 @@
+# The one place the Rust version is chosen.
+#
+# CI used `dtolnay/rust-toolchain@stable`, which tracks whatever the newest
+# stable release happens to be, while this machine had 1.90. Eight releases of
+# new lints later, `cargo clippy -- -D warnings` was clean locally and failed in
+# CI on the same commit. Pinning here means a local run and a CI run are the same
+# run, and a toolchain bump becomes a deliberate commit rather than a surprise on
+# an unrelated pull request.
+#
+# To bump: `rustup update stable`, put the new version here, then run
+# `cargo clippy --all-targets -- -D warnings` and fix what the new lints find.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]

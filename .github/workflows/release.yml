@@ -1,0 +1,152 @@
+name: release
+
+# Builds the installable extension. A .mcpb carries a platform-specific binary,
+# so each target gets its own bundle and volunteers download the one for their
+# machine.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One Mac build, universal (arm64 + x86_64) via lipo. Volunteers get a
+          # single Mac download and never have to identify their processor.
+          #
+          # There is no Intel runner in this matrix on purpose: macos-13 was
+          # retired in December 2025 (a job targeting it queues forever), and
+          # GitHub drops x86_64 macOS entirely after macos-15-intel goes in
+          # August 2027. Cross-compiling both slices on an arm64 runner outlives
+          # both deadlines. See DECISIONS.md D30.
+          - os: macos-26
+            universal: "1"
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            platform: darwin
+            suffix: -macos
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            targets: x86_64-unknown-linux-gnu
+            platform: linux
+            suffix: -linux-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      # No toolchain action: `rust-toolchain.toml` pins the version, and rustup
+      # installs it on first use. One source of truth, so a green build here is
+      # the same build as on a laptop.
+      #
+      # The cross-compilation targets have to be added explicitly now that the
+      # action is not doing it. `matrix.targets` is comma-separated because a
+      # universal macOS bundle needs both Apple architectures (DECISIONS.md D30).
+      - name: install the pinned toolchain and its targets
+        run: |
+          rustup show
+          echo "${{ matrix.targets }}" | tr ',' '\n' | while read -r t; do
+            [ -n "$t" ] || continue
+            echo "adding target $t"
+            rustup target add "$t"
+          done
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - run: cargo test --all-targets
+
+      - name: build the release archive
+        env:
+          SVDP_TARGET: ${{ matrix.target }}
+          SVDP_UNIVERSAL: ${{ matrix.universal }}
+          SVDP_PLATFORM: ${{ matrix.platform }}
+          SVDP_SUFFIX: ${{ matrix.suffix }}
+        run: ./scripts/build-release.sh
+
+      # Gatekeeper does not apply -- Claude Desktop does not propagate the
+      # quarantine attribute when it unpacks a bundle (DECISIONS.md D8) -- so no
+      # Developer ID or notarization step is needed.
+      - name: verify the archive
+        run: |
+          set -e
+          Z="dist/svdp-servware${{ matrix.suffix }}.zip"
+          test -f "$Z"
+
+          # One top-level folder, so unzipping gives the volunteer one thing.
+          roots=$(unzip -Z1 "$Z" | cut -d/ -f1 | sort -u)
+          test "$(echo "$roots" | wc -l)" -eq 1 || { echo "!! multiple top-level entries: $roots"; exit 1; }
+          test "$roots" = svdp-servware || { echo "!! top-level is $roots"; exit 1; }
+
+          for f in svdp-servware/START-HERE.txt svdp-servware/svdp-servware.mcpb; do
+            unzip -Z1 "$Z" | grep -qx "$f" || { echo "!! missing $f"; exit 1; }
+          done
+
+          # Every skill in the repo must ship, as its own zip, still zipped.
+          for d in skills/*/; do
+            n=$(basename "$d")
+            unzip -Z1 "$Z" | grep -qx "svdp-servware/skills/$n.zip" \
+              || { echo "!! skills/$n.zip missing from the archive"; exit 1; }
+            echo "ok: skill $n"
+          done
+
+          # The bundle inside must be a real .mcpb for THIS platform.
+          rm -rf /tmp/verify && mkdir -p /tmp/verify
+          unzip -q "$Z" -d /tmp/verify
+          M=/tmp/verify/svdp-servware/svdp-servware.mcpb
+          unzip -l "$M" | grep -q 'bin/svdp-mcp'
+          if [ "${{ matrix.universal }}" = "1" ]; then
+            unzip -q -o "$M" bin/svdp-mcp -d /tmp/verify/mcpb
+            got=$(lipo -archs /tmp/verify/mcpb/bin/svdp-mcp)
+            echo "$got" | grep -q arm64  || { echo "!! no arm64 slice: $got"; exit 1; }
+            echo "$got" | grep -q x86_64 || { echo "!! no x86_64 slice: $got"; exit 1; }
+            echo "ok: universal binary carries $got"
+          fi
+          unzip -p "$M" manifest.json | python3 -c "
+          import json,sys
+          m=json.load(sys.stdin)
+          assert m['server']['type']=='binary', m['server']
+          assert m['compatibility']['platforms']==['${{ matrix.platform }}']
+          for k,v in m['user_config'].items():
+              assert 'description' in v, f'{k} needs a description'
+          print('manifest ok:', m['name'], m['version'], m['compatibility']['platforms'])
+          "
+          # Each skill zip must itself be a readable archive whose root is the
+          # skill directory -- that is what Claude Desktop accepts.
+          for z in /tmp/verify/svdp-servware/skills/*.zip; do
+            n=$(basename "$z" .zip)
+            unzip -Z1 "$z" | grep -qx "$n/SKILL.md" \
+              || { echo "!! $z is not a skill archive rooted at $n/"; exit 1; }
+            echo "ok: $n.zip is a valid skill archive"
+          done
+
+      # upload and download are on different majors because that is what each
+      # ships as current; they share the same v4+ artifact backend.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: svdp-servware${{ matrix.suffix }}
+          path: dist/svdp-servware${{ matrix.suffix }}.zip
+
+  publish:
+    needs: bundle
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with: { path: dist, merge-multiple: true }
+      - run: ls -lh dist
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*.zip
+          body: |
+            Download the file for your computer, unzip it, and open
+            **START-HERE.txt** inside. It walks through the whole setup.
+
+            - **Mac** (any Mac, Apple silicon or Intel) — `svdp-servware-macos.zip`
+            - **Linux** — `svdp-servware-linux-x86_64.zip`
+
+            Each contains the extension (`svdp-servware.mcpb`), the optional
+            skills as separate zips, and the instructions.

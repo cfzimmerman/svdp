@@ -19,6 +19,8 @@
 8. [Helper / Lookup Endpoints](#8-helper--lookup-endpoints)
 9. [Calendar Endpoints](#9-calendar-endpoints)
 10. [Notes and Conventions](#10-notes-and-conventions)
+11. [Neighbors (Clients)](#11-neighbors-clients)
+12. [Reports](#12-reports)
 
 ---
 
@@ -451,7 +453,51 @@ curl -b "$COOKIE_JAR" \
 ```
 
 This page loads and then fires three XHR requests automatically (see
-[Helper / Lookup Endpoints](#8-helper--lookup-endpoints)).
+[Helper / Lookup Endpoints](#8-helper--lookup-endpoints)). Those three cover the
+*files* and *approval* fragments and the status check — **not** the page's tabs.
+
+#### Tab structure
+
+The page is a six-tab Bootstrap layout and **every pane is server-rendered inline
+in the same response** (~200 KB). No XHR is needed to read any of them:
+
+| Pane id | Tab |
+|---|---|
+| `tabs-general` | General |
+| `tabs-incexp` | Income/Expenses |
+| `tabs-familymembers` | **Household Members** |
+| `tabs-assistanceitems` | Assistance |
+| `tabs-files` | Req Files |
+| `tabs-history` | History |
+
+#### Household Members table (`div#tabs-familymembers`)
+
+An `<h4>` reading `Adults: {n}   Children: {n}`, then a
+`table.table-striped.table-condensed` with these headers in order:
+
+```
+First Name | Last Name | Relationship | Age | Phone | SSN (Last 4) | Drivers License/ID | Disabled | Notes
+```
+
+Rows are plain `<td>`s — no per-row `id`, no `data-*` attributes, no edit links.
+Locate columns **by header text**, never by index.
+
+Verified against 139 real households:
+
+* **`Age` is an integer rendered server-side.** There is no per-member birthdate
+  anywhere on the page. (`resources/js/main.js` defines `calcAge(dobString)`, but
+  the detail page never calls it.)
+* **The table excludes the neighbour themselves.** No row ever has
+  `Relationship` of "Self"; observed values are Son, Daughter, Spouse, Domestic
+  Partner, Mother, Father, Brother, Sister, Cousin, Grandson, Granddaughter,
+  Niece, Nephew, Stepson, Uncle, Grandparent, Other. `calculatedHouseholdCount`
+  equalled the row count **plus one** in all 139 cases.
+* **The table may be empty.** ServWare's own tooltip on the neighbour page says
+  "Enter household adult and child counts or enter specific household member
+  details. Only one or the other is allowed." Households recorded by head count
+  render no rows, and their members' ages do not exist in the system. This was 19
+  of 158 households in a recent three-month window.
+* A small number of rows have a blank `Age`.
 
 ---
 
@@ -843,3 +889,87 @@ Known application routes discovered from the home page HTML:
 | `/security/logout` | Logout (POST) |
 | `/security/extendSession` | Extend session timeout |
 | `/security/redirectLogin` | Redirect to login on timeout |
+
+
+---
+
+## 11. Neighbors (Clients)
+
+### GET /app/clients
+
+The Neighbors HTML page. Its roster is loaded by the endpoint below.
+
+### GET /app/clients/list
+
+The conference's whole neighbour roster. Same DataTables server-side protocol as
+[Assistance Requests List](#4-assistance-requests-list): `sEcho`, `iColumns`,
+`sColumns`, `iDisplayStart`, `iDisplayLength`, per-column `mDataProp_N` /
+`sSearch_N` / `bRegex_N` / `bSearchable_N` / `bSortable_N`, and `iSortCol_N` /
+`sSortDir_N`. One extra filter is present: `filterByBirthDate` (sent empty).
+
+Captured column set (`sColumns`, 14 columns):
+
+```
+id,id,alertNote,lastName,firstName,assignedMember,streetAddressLine1,city,
+homePhone,mobilePhone,ssnLastFour,birthDate,id,id
+```
+
+Default sort is `iSortCol_0=3` (lastName) then `iSortCol_1=4` (firstName), both
+ascending.
+
+Response envelope is `{additionalData, sEcho, iTotalRecords, iTotalDisplayRecords, aaData}`.
+`aaData` holds **complete `Client` objects** — the full record regardless of which
+columns were requested, so narrowing `sColumns` buys nothing.
+
+Beyond the fields already listed under [Client Object](#client-object-nested-in-assistancerequest),
+the roster response also carries: `postalCode`, `workPhone`, `caseNumber`,
+`ssnLastFour`, `driversLicenseId`, `identificationType`, `idExpirationDate`,
+`idVerificationDate`, `educationLevel`, `educationInstitutionName`, `employerName`,
+`employmentLengthInYears`, `incomeLevel`, `incomeLevelDesc`, `householdAdultCount`,
+`householdChildCount`, `pantryEligible`, `pantryId`, `prevHomeless`,
+`honorablyDischarged`, `releaseOfInformationDate`, `religionPreference`,
+`usdaApplicationDate`, `markedForDeletion`, `crossConferenceKey`, `version`,
+`dateCreated`, `dateModified`, `createdBy`, `modifiedBy`.
+
+At Nativity this returns `iTotalRecords: 416`, i.e. five pages of 100.
+
+`householdAdultCount` / `householdChildCount` are frequently null — 62 and 50 of
+416 populated. The `calculated*` counts on an assistance request are the better
+source.
+
+### GET /app/clients/{id}
+
+The neighbour detail page. Panes are `tabs-general`, `tabs-incexp`, `tabs-family`,
+`tabs-accounts`, `tabs-files`, `tabs-programs`, `tabs-followups`, `tabs-history`.
+
+**Its household roster is not inline.** `tabs-family` renders only the
+`householdAdultCount` / `householdChildCount` inputs plus an empty
+`<div id="familymember-list"></div>` filled by XHR. To read household members and
+ages, use the **request** detail page instead, which serves the same table
+server-rendered. See DECISIONS.md D19.
+
+---
+
+## 12. Reports
+
+The detail page's navigation menu exposes about two dozen report routes. **None
+has been exercised**: their parameters, response formats, and whether any offers a
+CSV or Excel export are all unknown. They are recorded here so a later session
+knows they exist and knows that nothing here has been verified.
+
+`/app/assistancerequests/reports/` — `clientrequestsummariesrpt` ("Neighbor
+Assistance Summary"), `assttypesummaryrpt`, `activityrpt`, `activitydtlrpt`,
+`checksrpt`, `inkinddtlrpt`, `utilitydtlrpt`, `requestassignmentrpt`,
+`helplinerequestactivityrpt`.
+
+Also `/app/assistancerequests/rpt/{id}` (per-request printable),
+`/app/assistancerequests/refreshclient/{id}`, `/app/reports` (Conference Activity),
+`/app/home/district/clients`, `/app/specialprograms/clientspecialpgmrpt`, and
+finance/member reports under `/app/conferencedeposits/`,
+`/app/conferenceexpenditures/`, `/app/conferencefinance/`, `/app/conferencereceipts/`,
+`/app/conferencemembers/`, `/app/conferencevolunteers/`, `/app/conferencelandlords/`,
+`/app/mileagehoursinservicelist/`.
+
+The export tooling deliberately does not use any of them: the same information is
+reconstructable from `/app/clients/list` plus `/app/assistancerequests/list`, which
+are understood, with columns we choose. See DECISIONS.md D19.

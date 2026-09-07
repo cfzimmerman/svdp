@@ -1,11 +1,27 @@
 /target
+/dist
 
-# Directory for .har files and other info for reverse-engineering
-# the servware API.
-/servware
+# ---------------------------------------------------------------------------
+# PII: nothing derived from real ServWare data may ever be committed.
+# Match by glob, not by filename -- the weekly workflow creates ad-hoc files
+# like group1.csv, and an exact-name ignore list does not cover them.
+# ---------------------------------------------------------------------------
+*.csv
+*.har
+*.json.gz
 
-# Default output locations
-volunteers.csv
-requests.csv
+# Saved ServWare pages and list responses are as sensitive as a CSV. The
+# generated fixtures are the one exception: they are synthetic by construction
+# (scripts/gen-fixtures.py) and CI re-generates them to prove it.
+*.html
+!/tests/fixtures/*.html
+
+# Raw captures for local reverse-engineering. Never leaves this machine.
+/servware/
+/recordings/
+
+# No CSV is ever committed, synthetic or not. Fixtures are HTML and JSON, which
+# keeps this rule absolute and matches the check CI enforces -- an earlier
+# `!/tests/fixtures/**/*.csv` exception here contradicted that check outright.
 
 .env
