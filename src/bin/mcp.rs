@@ -33,6 +33,8 @@ use svdp::domain::export::ExportDir;
 use svdp::domain::export::HouseholdRoster;
 use svdp::domain::policy::ConferenceConfig;
 use svdp::domain::pull;
+use svdp::domain::recency::DeliveryRecency;
+use svdp::domain::recency::HISTORY_LOOKBACK_DAYS;
 use svdp::domain::session::Delivery;
 use svdp::domain::session::DeliveryOutcome;
 use svdp::domain::session::DeliverySession;
@@ -119,6 +121,11 @@ struct OpenRequestView {
     date_requested: String,
     days_open: i64,
     suggested_gift_card_dollars: u32,
+    /// Days since this household last received anything, when known.
+    days_since_delivery: Option<i64>,
+    /// False when this household already had a delivery inside the monthly
+    /// interval, and so is not part of today's working list.
+    due: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -263,8 +270,12 @@ impl Svdp {
         Ok(ok(lines.join("\n")))
     }
 
-    /// Lists the open assistance requests, oldest first, with the gift card
-    /// amount each household size calls for. Use before recording a delivery.
+    /// Lists the families waiting for a delivery.
+    ///
+    /// Shows two lists: every open request in ServWare, then the shorter working
+    /// list of families actually due one. Deliveries run once a month per family,
+    /// so households delivered to within the last few weeks appear in the first
+    /// list but not the second. Show the volunteer both.
     #[tool(name = "list_open_requests", annotations(read_only_hint = true))]
     async fn list_open_requests(&self) -> Result<CallToolResult, ErrorData> {
         let requests = match list::fetch_all(&self.client, StatusFilter::Open).await {
@@ -272,13 +283,88 @@ impl Svdp {
             Err(e) => return Ok(fail(&e)),
         };
         let today = chrono::Local::now().date_naive();
+        let interval = self.config.delivery_interval_days;
+
+        // If the history read fails, everything is reported as due and the
+        // result says the check could not run. A short list that quietly omitted
+        // families would be worse than a long one.
+        let from = today - chrono::Duration::days(HISTORY_LOOKBACK_DAYS);
+        let (recency, history_failed) = match list::fetch_window(
+            &self.client,
+            StatusFilter::Any,
+            Some(from),
+            Some(today),
+            list::WINDOW_MAX_PAGES,
+        )
+        .await
+        {
+            Ok(history) => (Some(DeliveryRecency::from_history(&history)), false),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not read delivery history");
+                (None, true)
+            }
+        };
+
         let mut views: Vec<OpenRequestView> = requests
             .iter()
-            .map(|r| self.project(r, today))
+            .map(|r| {
+                let last = recency
+                    .as_ref()
+                    .and_then(|rec| rec.last_delivery(r.client.id, r.id));
+                self.project(r, today, last)
+            })
             .collect();
         views.sort_by_key(|v| -v.days_open);
 
-        Ok(ok(render_table(&views)))
+        let due: Vec<&OpenRequestView> = views.iter().filter(|v| v.due).collect();
+        let held = views.len() - due.len();
+
+        let mut out = String::new();
+        out.push_str(&format!(
+            "EVERY OPEN REQUEST IN SERVWARE ({})\n\n",
+            views.len()
+        ));
+        out.push_str(&render_table(&views));
+
+        out.push_str(&format!("\n\nDUE FOR A DELIVERY ({})\n\n", due.len()));
+        if due.is_empty() {
+            out.push_str("Nobody is due right now.\n");
+        } else {
+            out.push_str("| # | Name | Household | Gift card |\n");
+            out.push_str("|---|------|-----------|-----------|\n");
+            for v in &due {
+                out.push_str(&format!(
+                    "| {} | {} | {} | ${} |\n",
+                    v.request_id, v.name, v.household_size, v.suggested_gift_card_dollars
+                ));
+            }
+        }
+
+        out.push('\n');
+        if held > 0 {
+            out.push_str(&format!(
+                "\n{held} famil{} in the first list but not the second, because {} already \
+                 had a delivery within the last {interval} days and deliveries go out once a \
+                 month per family. Show the volunteer both lists and say that in plain words. \
+                 If they say they delivered to one of them anyway, believe them and record it \
+                 — they were there.",
+                if held == 1 { "y is" } else { "ies are" },
+                if held == 1 { "it" } else { "they" }
+            ));
+        } else if !history_failed {
+            out.push_str(&format!(
+                "\nBoth lists are the same: no family here has had a delivery in the last \
+                 {interval} days."
+            ));
+        }
+        if history_failed {
+            out.push_str(
+                "\nThe delivery history could not be read, so nothing could be checked \
+                 against the once-a-month rule and both lists are the same. Say so, and check \
+                 with the volunteer before recording.",
+            );
+        }
+        Ok(ok(out))
     }
 
     /// Lists the volunteers a delivery can be credited to, with their ServWare
@@ -679,7 +765,12 @@ impl Svdp {
 }
 
 impl Svdp {
-    fn project(&self, r: &RequestSummary, today: chrono::NaiveDate) -> OpenRequestView {
+    fn project(
+        &self,
+        r: &RequestSummary,
+        today: chrono::NaiveDate,
+        last_delivery: Option<chrono::NaiveDate>,
+    ) -> OpenRequestView {
         let phone = if r.client.mobile_phone.trim().is_empty() {
             r.client.home_phone.trim()
         } else {
@@ -696,6 +787,8 @@ impl Svdp {
             suggested_gift_card_dollars: self
                 .config
                 .gift_card_dollars(r.calculated_household_count),
+            days_since_delivery: last_delivery.map(|d| (today - d).num_days()),
+            due: !last_delivery.is_some_and(|d| self.config.served_recently(d, today)),
         }
     }
 }
@@ -709,20 +802,29 @@ fn days_since(date: &str, today: chrono::NaiveDate) -> i64 {
 
 fn render_table(views: &[OpenRequestView]) -> String {
     if views.is_empty() {
-        return "There are no open requests in ServWare right now.".into();
+        return "No families are waiting for a delivery right now.".into();
     }
-    let mut out = format!("{} open requests, longest-waiting first:\n\n", views.len());
-    out.push_str("| # | Name | Household | Gift card | Requested | Waiting | Address | Phone |\n");
-    out.push_str("|---|------|-----------|-----------|-----------|---------|---------|-------|\n");
+    let mut out = String::new();
+    out.push_str(
+        "| # | Name | Household | Gift card | Requested | Waiting | Last delivery | Due now | Address | Phone |\n",
+    );
+    out.push_str(
+        "|---|------|-----------|-----------|-----------|---------|---------------|---------|---------|-------|\n",
+    );
     for v in views {
         out.push_str(&format!(
-            "| {} | {} | {} | ${} | {} | {} days | {} | {} |\n",
+            "| {} | {} | {} | ${} | {} | {} days | {} | {} | {} | {} |\n",
             v.request_id,
             v.name,
             v.household_size,
             v.suggested_gift_card_dollars,
             v.date_requested,
             v.days_open,
+            match v.days_since_delivery {
+                Some(d) => format!("{d} days ago"),
+                None => "none on record".to_string(),
+            },
+            if v.due { "yes" } else { "not yet" },
             v.address,
             v.phone
         ));
@@ -918,7 +1020,10 @@ impl ServerHandler for Svdp {
              - Never suggest a dollar amount for a project. The delivery amounts are a \
              weekly-delivery policy and do not carry over; that scale is the volunteer's \
              decision. Money in these files is what was already given.\n\
-             - Use code to do arithmetic over these files rather than counting by eye."
+             - Use code to do arithmetic over these files rather than counting by eye.\n\
+             - Families receive one delivery a month. The waiting list comes back as two \
+             lists: every open request, then the shorter set actually due. Show the volunteer \
+             both and say in one sentence why they differ. Never show only the short one."
                 .into(),
         );
         info

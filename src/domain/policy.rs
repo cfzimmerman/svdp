@@ -21,6 +21,10 @@ pub struct ConferenceConfig {
     /// Write a machine tag into each assistance item's notes so a retry can
     /// recognise its own work. See DECISIONS.md D7.
     pub tag_assistance_notes: bool,
+    /// A household delivered to within this many days is held back from the
+    /// working list by default. See DECISIONS.md D29.
+    #[serde(default = "default_delivery_interval_days")]
+    pub delivery_interval_days: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +100,20 @@ impl ConferenceConfig {
             return String::new();
         }
         format!("{} — SVdP delivery {date}", self.tag(session, slot))
+    }
+}
+
+/// Kept as a function rather than a literal in the struct so an older external
+/// `conference.toml` without the field still loads.
+fn default_delivery_interval_days() -> u32 {
+    28
+}
+
+/// Whether a household delivered to on `last` is still inside the once-a-month
+/// interval, and so should be held back from the working list.
+impl ConferenceConfig {
+    pub fn served_recently(&self, last: chrono::NaiveDate, today: chrono::NaiveDate) -> bool {
+        (today - last).num_days() < i64::from(self.delivery_interval_days)
     }
 }
 

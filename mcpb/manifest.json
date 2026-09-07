@@ -1,10 +1,10 @@
 {
   "manifest_version": "0.3",
   "name": "svdp-servware",
-  "display_name": "SVdP ServWare",
+  "display_name": "Nativity ServWare",
   "version": "0.3.0",
-  "description": "Record SVdP deliveries in ServWare, and pull neighbour information into spreadsheets.",
-  "long_description": "Two jobs for St. Vincent de Paul volunteers, both in plain conversation.\n\nRECORDING DELIVERIES. Say \"I did deliveries today\". It lists the families waiting, asks which ones you reached, checks the gift card amounts with you, asks who drove, shows you everything, and only writes to ServWare after you say yes.\n\nGETTING LISTS OF FAMILIES. Say \"I need a list of families with young children\". It saves spreadsheets to your Desktop -- who the conference serves, who asked for help and when, what was given, and everyone in each household with their ages -- then helps you work out the answer. Ages are not in any report ServWare can export.\n\nYour ServWare username and password are stored by your computer and never appear in the conversation. Nothing is sent anywhere except ServWare itself.",
+  "description": "Allows Claude to run a few pre-defined operations on Nativity's ServWare instance.",
+  "long_description": "Saint Vincent de Paul work at Nativity involves some routine book keeping tasks. The most common is entering ServWare data after delivering food. Similar lower-frequency projects like Adopt a Family also arise. This bundle allows Claude to perform some basic ServWare operations for you. The easiest way to get started is by invoking the related Skill files or asking Claude what SVdP tasks it can help with.",
   "author": {
     "name": "Cory Zimmerman",
     "url": "https://github.com/cfzimmerman/svdp"
@@ -29,13 +29,13 @@
     "servware_user": {
       "type": "string",
       "title": "ServWare username",
-      "description": "The username your SVdP conference gave you for servware.org.",
+      "description": "servware.org username",
       "required": true
     },
     "servware_pass": {
       "type": "string",
       "title": "ServWare password",
-      "description": "Your servware.org password. Stored in your Mac keychain, never shown in chat.",
+      "description": "servware.org password",
       "sensitive": true,
       "required": true
     }

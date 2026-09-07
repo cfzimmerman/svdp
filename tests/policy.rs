@@ -113,3 +113,28 @@ name_contains = "Card"
 
     unsafe { std::env::remove_var("SVDP_CONFERENCE_CONFIG") };
 }
+
+/// Deliveries run once a month per family, so a household served three weeks ago
+/// is held back from the working list.
+///
+/// 28 days, not 30, and the difference is not cosmetic: deliveries run on fixed
+/// weekdays, so a monthly cadence lands on exactly four weeks very often. Across
+/// 1,114 real repeat deliveries a 28-day threshold held back 55 of them; 30 days
+/// would have held back 280. See DECISIONS.md D29.
+#[test]
+fn the_monthly_interval_holds_back_four_weeks_not_a_calendar_month() {
+    let config = ConferenceConfig::default();
+    assert_eq!(config.delivery_interval_days, 28);
+
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 7).unwrap();
+    let days_ago = |n: i64| today - chrono::Duration::days(n);
+
+    assert!(config.served_recently(days_ago(0), today), "delivered today");
+    assert!(config.served_recently(days_ago(21), today), "three weeks ago");
+    assert!(config.served_recently(days_ago(27), today), "one day short");
+    assert!(
+        !config.served_recently(days_ago(28), today),
+        "exactly four weeks is due again -- this is the case 30 days would break"
+    );
+    assert!(!config.served_recently(days_ago(35), today), "five weeks ago");
+}

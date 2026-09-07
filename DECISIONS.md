@@ -731,3 +731,95 @@ and one with a skill withheld, to confirm they fail rather than merely run.
 **Instructions ride inside the archive.** `START-HERE.txt` is the primary setup document, not
 `docs/for-volunteers.md` and not the release notes: this audience is assumed to read nothing
 outside what they were handed.
+
+## D29. The monthly interval is 28 days, and both lists are always shown
+
+*September 2026*
+
+Volunteer feedback: deliveries go out once a month per family, so the working list should not
+offer a household served three weeks ago.
+
+**The threshold is 28 days, not 30, and the difference is not cosmetic.** Measured against a year
+of real assistance items — 1,114 repeat deliveries across 177 households — the gap between
+consecutive deliveries clusters hard at exactly four weeks, because deliveries run on fixed
+weekdays:
+
+| gap | count |
+|---|---|
+| 1–27 days | 55 |
+| **28–31 days** | **388** |
+| 32–45 days | 462 |
+| 46+ days | 209 |
+
+A 28-day threshold would have held back 55 of those 1,114 (5%). A 30-day threshold would have
+held back **280 (25%)** — a quarter of legitimate monthly deliveries suppressed. The cliff sits
+precisely between 28 and 29. Live output confirms it: five families currently sit at exactly 30
+days since their last delivery and are correctly shown as due. Configurable as
+`delivery_interval_days`.
+
+**Recency reads `date_provided`, not `date_requested`** (D23). `client.lastRequestDate` is
+useless here: a household with an open request last *asked* today by definition.
+
+**The history lookback is 120 days.** The list endpoint can only filter on `date_requested`, but
+recency is about when help arrived, and the lag between the two is median 4 days, p99.9 39 days,
+observed maximum 134. A 28-day window would miss deliveries against older requests entirely.
+Costs about five extra JSON pages, paced.
+
+**A partly recorded delivery must not hide its own request.** An interrupted recording leaves
+items on a still-open request; if those counted toward recency, the request would disappear from
+the list of work left to do. `last_delivery` therefore excludes items belonging to the request
+being judged.
+
+**Both lists are always shown** — every open request first, then the shorter due list, with a
+"Due now" column in the full table making the filter auditable. Cory's reasoning: if the
+filtering does something strange, the volunteer can still see everything. This replaced an
+earlier design where the tool returned only the filtered list plus an `include_recent` override;
+showing both makes that parameter redundant, and one way to do a thing beats two.
+
+**The filter is advice, not enforcement.** If a volunteer says they delivered to a household that
+was not due, that is recorded. They were there. The skill states this explicitly, because the
+failure mode to avoid is a tool arguing with the person holding the clipboard.
+
+**Placement.** The interval lives in `conference.toml` and `ConferenceConfig::served_recently`
+(conference policy, like the gift-card ladder); `domain::recency` turns request history into
+last-delivery dates; the MCP tool applies it and reports; the skill owns the wording. The ServWare
+protocol layer is untouched.
+
+## D30. One universal Mac build, and no Intel runner
+
+*September 2026*
+
+An Intel Mac release job sat queued indefinitely. The cause: **`macos-13` was retired in December
+2025**, so a job requesting that label never gets a runner. It had been pinned since the release
+workflow was first written and nothing had exercised it.
+
+The obvious repair was to swap in a live Intel label — `macos-26-intel` (a standard x64 runner,
+announced with macOS 26's general availability in February 2026), `macos-15-intel` (the last
+x86_64 image, available until August 2027), or the billed `macos-14-large`. All three were
+rejected, because **GitHub drops x86_64 macOS entirely after August 2027** and any of them just
+schedules this same conversation for then.
+
+Instead there is now **one Mac job producing a universal binary**: both `aarch64-apple-darwin` and
+`x86_64-apple-darwin` are built on an arm64 runner (`macos-26`, pinned rather than
+`macos-latest`) and joined with `lipo`. This outlives the x86_64 runner deadline, since
+cross-compiling to Intel does not require an Intel machine.
+
+**The volunteer-facing win is the actual point.** The release went from three downloads to two, and
+the setup instructions no longer ask an elderly volunteer to open the Apple menu, read "About This
+Mac", and decide whether their processor says M1 or Intel. There is one Mac file and it works on
+every Mac. For this audience, removing a decision is worth more than saving a build.
+
+`SVDP_UNIVERSAL=1` selects the fat build in `build-mcpb.sh`, which then **asserts both slices are
+present** via `lipo -archs` — a bundle silently carrying one architecture would install cleanly and
+then fail for half the conference. CI re-checks the same property on the bundle inside the shipped
+archive. `deploy-mac.sh` also builds universal, so the artifact tested on the maintainer's Mac is
+the one volunteers receive.
+
+**Unverified:** the x86_64 slice has never been compiled. The Mac on the LAN was asleep, and this
+machine is Linux, so nothing here could cross-compile a Darwin target. The risk sits with
+`aws-lc-rs` (pulled in by `reqwest`'s rustls stack), which builds C and assembly through cmake;
+macOS x86_64 is a first-class target for it and GitHub's runners carry cmake, so this is expected
+to work rather than known to. `workflow_dispatch` is enabled on the release workflow, so it can be
+proven without cutting a tag.
+
+Also worth recording, since it came up: **there is no macOS 16.** Apple renumbered from 15 to 26.

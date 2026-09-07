@@ -17,16 +17,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14          # Apple Silicon
-            target: aarch64-apple-darwin
+          # One Mac build, universal (arm64 + x86_64) via lipo. Volunteers get a
+          # single Mac download and never have to identify their processor.
+          #
+          # There is no Intel runner in this matrix on purpose: macos-13 was
+          # retired in December 2025 (a job targeting it queues forever), and
+          # GitHub drops x86_64 macOS entirely after macos-15-intel goes in
+          # August 2027. Cross-compiling both slices on an arm64 runner outlives
+          # both deadlines. See DECISIONS.md D30.
+          - os: macos-26
+            universal: "1"
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
             platform: darwin
-            suffix: -macos-arm64
-          - os: macos-13          # Intel
-            target: x86_64-apple-darwin
-            platform: darwin
-            suffix: -macos-x86_64
+            suffix: -macos
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            targets: x86_64-unknown-linux-gnu
             platform: linux
             suffix: -linux-x86_64
     runs-on: ${{ matrix.os }}
@@ -34,7 +40,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.targets }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
@@ -44,6 +50,7 @@ jobs:
       - name: build the release archive
         env:
           SVDP_TARGET: ${{ matrix.target }}
+          SVDP_UNIVERSAL: ${{ matrix.universal }}
           SVDP_PLATFORM: ${{ matrix.platform }}
           SVDP_SUFFIX: ${{ matrix.suffix }}
         run: ./scripts/build-release.sh
@@ -79,6 +86,13 @@ jobs:
           unzip -q "$Z" -d /tmp/verify
           M=/tmp/verify/svdp-servware/svdp-servware.mcpb
           unzip -l "$M" | grep -q 'bin/svdp-mcp'
+          if [ "${{ matrix.universal }}" = "1" ]; then
+            unzip -q -o "$M" bin/svdp-mcp -d /tmp/verify/mcpb
+            got=$(lipo -archs /tmp/verify/mcpb/bin/svdp-mcp)
+            echo "$got" | grep -q arm64  || { echo "!! no arm64 slice: $got"; exit 1; }
+            echo "$got" | grep -q x86_64 || { echo "!! no x86_64 slice: $got"; exit 1; }
+            echo "ok: universal binary carries $got"
+          fi
           unzip -p "$M" manifest.json | python3 -c "
           import json,sys
           m=json.load(sys.stdin)
@@ -119,8 +133,7 @@ jobs:
             Download the file for your computer, unzip it, and open
             **START-HERE.txt** inside. It walks through the whole setup.
 
-            - **Mac with Apple silicon** (M1 and later) — `svdp-servware-macos-arm64.zip`
-            - **Mac with Intel** — `svdp-servware-macos-x86_64.zip`
+            - **Mac** (any Mac, Apple silicon or Intel) — `svdp-servware-macos.zip`
             - **Linux** — `svdp-servware-linux-x86_64.zip`
 
             Each contains the extension (`svdp-servware.mcpb`), the optional

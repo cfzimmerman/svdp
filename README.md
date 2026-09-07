@@ -23,14 +23,14 @@ Download the file for your computer from the
 
 | Your computer | File |
 |---|---|
-| Mac, Apple silicon (M1 or later) | `svdp-servware-macos-arm64.mcpb` |
-| Mac, Intel | `svdp-servware-macos-x86_64.mcpb` |
-| Linux | `svdp-servware-linux-x86_64.mcpb` |
+| Any Mac | `svdp-servware-macos.zip` |
+| Linux | `svdp-servware-linux-x86_64.zip` |
 
-Not sure which Mac you have? Apple menu → About This Mac. If it says "Apple M1", "M2", "M3" or
-similar, use the Apple silicon one; if it says "Intel", use the Intel one.
+The Mac download works on every Mac — Apple silicon or Intel — so there is nothing to check and
+nothing to choose.
 
-Then in Claude Desktop: **Settings → Extensions**, and drag the downloaded file in.
+Unzip it, then follow `START-HERE.txt` inside — or in Claude Desktop go to
+**Settings → Extensions** and drag `svdp-servware.mcpb` in.
 
 ### 3. Enter your ServWare details and switch it on
 

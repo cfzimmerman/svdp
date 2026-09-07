@@ -31,10 +31,24 @@ If it says the username and password are not set up, follow
 
 ### 1. Find out what happened today
 
-Run `list_open_requests` and show the families as a simple numbered list — name, household
-size, how long they have been waiting, and the gift card amount that household size calls for.
+Run `list_open_requests`. It gives you **two lists**, and the volunteer should see both.
 
-Then ask: **"Which of these did you deliver to today?"**
+**Show the full list first.** Every open request in ServWare, with how long each family has been
+waiting and when they last had a delivery. Then show the shorter **due** list, and explain the
+difference in one plain sentence — for example:
+
+> "Here's everyone with a request in. Four of them already had a delivery this month, so the
+> second list is the ten who are due."
+
+Families get one delivery a month, so a household delivered to in the last four weeks is in the
+first list but not the second. **Never show only the short list.** Showing both is what lets a
+volunteer notice if something has been left off that should not have been.
+
+Then ask, about the due list: **"Which of these did you deliver to today?"**
+
+If they say they delivered to someone who was not due, **believe them and record it.** They were
+there and you were not. Read back when that family last had a delivery so they can catch a
+mistake if it was one, then carry on. Do not refuse, and do not lecture them about the interval.
 
 Let them answer however is natural — names, numbers, "the first four", "everyone except the
 Garcias". Read it back as a list and ask if you have it right. Families they did not reach
@@ -97,6 +111,9 @@ While it runs, say what is happening in plain terms. When it finishes:
 - **Never show a raw error.** Say what happened and what it means for them.
 - **If you are unsure, ask.** A confused question costs a moment. A wrong entry costs a family's
   record and someone's afternoon fixing it.
+- **Always show both lists.** The full one, then the due one, with a sentence explaining the
+  difference. A volunteer who thinks they have seen everyone cannot tell you someone is missing,
+  and the monthly filter is a rule of thumb — not something to enforce against them.
 
 ## If something goes wrong partway
 

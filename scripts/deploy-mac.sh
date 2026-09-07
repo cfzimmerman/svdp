@@ -31,7 +31,8 @@ ssh -o BatchMode=yes "$HOST" "test -d '$REMOTE/src/servware' && test -d '$REMOTE
 
 echo "==> building on $HOST"
 ssh -o BatchMode=yes "$HOST" REMOTE="$REMOTE" \
-    SVDP_TOOLCHAIN="${SVDP_TOOLCHAIN:-1.90.0}" bash -s <<'REMOTE_SCRIPT'
+    SVDP_TOOLCHAIN="${SVDP_TOOLCHAIN:-1.90.0}" \
+    SVDP_UNIVERSAL=1 SVDP_PLATFORM=darwin bash -s <<'REMOTE_SCRIPT'
 set -euo pipefail
 cd "$REMOTE"
 

@@ -6,13 +6,16 @@ you can get lists of families without building a spreadsheet by hand.
 You need a ServWare username and password. Your conference president issues those; this cannot
 create one for you.
 
+There is one file for Mac and it works on every Mac, so there is nothing to check about your
+computer first.
+
 ## Setting it up, once
 
 **1. Install Claude Desktop.** Download it from [claude.ai/download](https://claude.ai/download)
 and sign in.
 
 **2. Unzip the file you were sent.** It is called something like
-`svdp-servware-macos-arm64.zip`. Double-click it. You get a folder called **svdp-servware**
+`svdp-servware-macos.zip`. Double-click it. You get a folder called **svdp-servware**
 containing everything below, plus a `START-HERE.txt` that repeats these steps.
 
 **3. Add the SVdP extension.** In Claude, open **Settings → Extensions**, and drag

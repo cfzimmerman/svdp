@@ -1,26 +1,51 @@
 #!/usr/bin/env bash
-# Build a .mcpb bundle containing the natively-compiled MCP server.
-# Must run on the target platform (the bundle carries a platform-specific binary).
+# Build a .mcpb bundle containing the compiled MCP server.
+#
+# The bundle carries a compiled binary, so it must be built for the platform it
+# is for. On macOS, set SVDP_UNIVERSAL=1 to build both architectures and join
+# them with `lipo` into one universal binary: volunteers then have a single Mac
+# download and never have to work out whether their Mac is Apple silicon or
+# Intel. It also removes any need for an Intel runner, which matters because
+# GitHub retired macos-13 in December 2025 and drops x86_64 macOS entirely in
+# 2027. See DECISIONS.md D30.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${1:-$ROOT/dist}"
 TOOLCHAIN="${SVDP_TOOLCHAIN:-}"        # e.g. SVDP_TOOLCHAIN=1.90.0
 TARGET="${SVDP_TARGET:-}"              # e.g. x86_64-apple-darwin
+UNIVERSAL="${SVDP_UNIVERSAL:-}"        # macOS only: build a fat arm64+x86_64 binary
 # One bundle per platform: a .mcpb carries a platform-specific binary, so the
 # manifest must declare the platform it is actually for.
 PLATFORM="${SVDP_PLATFORM:-}"          # darwin | linux | win32
 SUFFIX="${SVDP_SUFFIX:-}"              # appended to the bundle filename
 
 cd "$ROOT"
-echo "==> building release binary${TARGET:+ for $TARGET}"
-cargo ${TOOLCHAIN:+"+$TOOLCHAIN"} build --release --bin mcp ${TARGET:+--target "$TARGET"}
-
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/bin"
-BIN="target/${TARGET:+$TARGET/}release/mcp"
-cp "$BIN" "$STAGE/bin/svdp-mcp"
+
+if [ -n "$UNIVERSAL" ]; then
+  ARM=aarch64-apple-darwin
+  X86=x86_64-apple-darwin
+  echo "==> building universal release binary ($ARM + $X86)"
+  for t in "$ARM" "$X86"; do
+    rustup target add ${TOOLCHAIN:+--toolchain "$TOOLCHAIN"} "$t" >/dev/null
+    cargo ${TOOLCHAIN:+"+$TOOLCHAIN"} build --release --bin mcp --target "$t"
+  done
+  lipo -create -output "$STAGE/bin/svdp-mcp" \
+    "target/$ARM/release/mcp" "target/$X86/release/mcp"
+  # A bundle that silently carried one architecture would install fine and then
+  # fail on half the volunteers' machines, so verify both are present.
+  lipo -archs "$STAGE/bin/svdp-mcp" | tr ' ' '\n' | sort > "$STAGE/archs"
+  printf 'arm64\nx86_64\n' | sort | diff -q - "$STAGE/archs" >/dev/null \
+    || { echo "!! universal binary has: $(lipo -archs "$STAGE/bin/svdp-mcp")" >&2; exit 1; }
+  echo "    archs: $(lipo -archs "$STAGE/bin/svdp-mcp")"
+else
+  echo "==> building release binary${TARGET:+ for $TARGET}"
+  cargo ${TOOLCHAIN:+"+$TOOLCHAIN"} build --release --bin mcp ${TARGET:+--target "$TARGET"}
+  cp "target/${TARGET:+$TARGET/}release/mcp" "$STAGE/bin/svdp-mcp"
+fi
 chmod +x "$STAGE/bin/svdp-mcp"
 cp mcpb/manifest.json "$STAGE/manifest.json"
 if [ -n "$PLATFORM" ]; then
