@@ -12,7 +12,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${1:-$ROOT/dist}"
-TOOLCHAIN="${SVDP_TOOLCHAIN:-}"        # e.g. SVDP_TOOLCHAIN=1.90.0
 TARGET="${SVDP_TARGET:-}"              # e.g. x86_64-apple-darwin
 UNIVERSAL="${SVDP_UNIVERSAL:-}"        # macOS only: build a fat arm64+x86_64 binary
 # One bundle per platform: a .mcpb carries a platform-specific binary, so the
@@ -30,8 +29,11 @@ if [ -n "$UNIVERSAL" ]; then
   X86=x86_64-apple-darwin
   echo "==> building universal release binary ($ARM + $X86)"
   for t in "$ARM" "$X86"; do
-    rustup target add ${TOOLCHAIN:+--toolchain "$TOOLCHAIN"} "$t" >/dev/null
-    cargo ${TOOLCHAIN:+"+$TOOLCHAIN"} build --release --bin mcp --target "$t"
+    # No toolchain override: rust-toolchain.toml pins the version, and both
+    # rustup and cargo honour it from the working directory. An override here
+    # was a third place the Rust version lived, and it had gone stale.
+    rustup target add "$t" >/dev/null
+    cargo build --release --bin mcp --target "$t"
   done
   lipo -create -output "$STAGE/bin/svdp-mcp" \
     "target/$ARM/release/mcp" "target/$X86/release/mcp"
@@ -43,7 +45,7 @@ if [ -n "$UNIVERSAL" ]; then
   echo "    archs: $(lipo -archs "$STAGE/bin/svdp-mcp")"
 else
   echo "==> building release binary${TARGET:+ for $TARGET}"
-  cargo ${TOOLCHAIN:+"+$TOOLCHAIN"} build --release --bin mcp ${TARGET:+--target "$TARGET"}
+  cargo build --release --bin mcp ${TARGET:+--target "$TARGET"}
   cp "target/${TARGET:+$TARGET/}release/mcp" "$STAGE/bin/svdp-mcp"
 fi
 chmod +x "$STAGE/bin/svdp-mcp"

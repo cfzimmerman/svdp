@@ -356,7 +356,7 @@ impl ExportDir {
                 Some((name, meta.len(), meta.modified().ok()?))
             })
             .collect();
-        out.sort_by(|a, b| b.2.cmp(&a.2));
+        out.sort_by_key(|(_, _, modified)| std::cmp::Reverse(*modified));
         out.into_iter().map(|(n, s, _)| (n, s)).collect()
     }
 

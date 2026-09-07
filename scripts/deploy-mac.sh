@@ -30,8 +30,10 @@ ssh -o BatchMode=yes "$HOST" "test -d '$REMOTE/src/servware' && test -d '$REMOTE
   || { echo "!! sync dropped source directories; aborting" >&2; exit 1; }
 
 echo "==> building on $HOST"
+# No SVDP_TOOLCHAIN: rust-toolchain.toml pins the version and rustup installs
+# it on the Mac on first use. This used to hard-code 1.90.0, which was a third
+# place the Rust version lived and had drifted from both CI and this machine.
 ssh -o BatchMode=yes "$HOST" REMOTE="$REMOTE" \
-    SVDP_TOOLCHAIN="${SVDP_TOOLCHAIN:-1.90.0}" \
     SVDP_UNIVERSAL=1 SVDP_PLATFORM=darwin bash -s <<'REMOTE_SCRIPT'
 set -euo pipefail
 cd "$REMOTE"

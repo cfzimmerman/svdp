@@ -38,7 +38,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      # No toolchain action: `rust-toolchain.toml` pins the version, and rustup
+      # installs it on first use. One source of truth, so a green clippy run on a
+      # laptop means the same thing as a green clippy run here.
+      - run: rustup show
         with:
           targets: ${{ matrix.targets }}
       - uses: Swatinem/rust-cache@v2

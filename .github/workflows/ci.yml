@@ -13,7 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      # No toolchain action: `rust-toolchain.toml` pins the version, and rustup
+      # installs it on first use. One source of truth, so a green clippy run on a
+      # laptop means the same thing as a green clippy run here.
+      - run: rustup show
       - uses: Swatinem/rust-cache@v2
 
       # The whole suite runs without network. If something here needs ServWare,
