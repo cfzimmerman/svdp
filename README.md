@@ -6,7 +6,7 @@ behind volunteer operations, and this project attempts to automate
 some of that.
 
 If you are a volunteer, you can find the most recent bundle [here](https://drive.google.com/drive/folders/1kM6oCAba7GTORgtKHy1NHGGalyh2h1o7?usp=sharing).
-Here's a video showing how to get set up: [VIDEO](https://youtu.be/Nijpbwm7PJc).
+Here's a video showing how to get set up: [https://youtu.be/Nijpbwm7PJc](https://youtu.be/Nijpbwm7PJc).
 If you run into any issues, please send me an email at `coryzimmerman93@gmail.com`.
 
 
